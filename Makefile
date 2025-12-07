@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -Wall -Wextra -std=c11 -g
 LIBS = -lpthread -lncurses
 
-SRC = src/main.c src/mural.c src/tedax.c src/ui.c src/coordinator.o
+SRC = src/main.c src/mural.c src/tedax.c src/ui.c src/coordinator.c
 OBJ = $(SRC:.c=.o)
 TARGET = ksne
 

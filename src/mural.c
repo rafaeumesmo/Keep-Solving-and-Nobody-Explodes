@@ -221,3 +221,11 @@ void mural_destroy(void) {
     mural_size = 0;
     pthread_mutex_unlock(&mural_lock);
 }
+
+void mural_lock_access(void) {
+    pthread_mutex_lock(&mural_lock);
+}
+
+void mural_unlock_access(void) {
+    pthread_mutex_unlock(&mural_lock);
+}

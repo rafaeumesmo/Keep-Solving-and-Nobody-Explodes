@@ -1,7 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "tedax.h"
 #include "mural.h"
-#include "ui.h"         // for log_event
+#include "ui.h"         
 #include "config.h"
 
 #include <stdlib.h>
@@ -46,10 +46,8 @@ static int ci_equal(const char *a, const char *b) {
 
 // acquire a free bench index (returns index or -1)
 static int bench_acquire_index_blocking(void) {
-    // If external sem provided, wait until available
     if (external_benches_sem) sem_wait(external_benches_sem);
 
-    // then find a free index
     int idx = -1;
     while (1) {
         pthread_mutex_lock(&bench_mutex);
@@ -62,12 +60,15 @@ static int bench_acquire_index_blocking(void) {
         }
         pthread_mutex_unlock(&bench_mutex);
         if (idx >= 0) return idx;
-        // no index found (should not happen if sem posted correctly), sleep briefly
-        usleep(100000);
+        
+        // CORREÇÃO: Usar nanosleep em vez de usleep (deprecated em POSIX 2008)
+        struct timespec ts;
+        ts.tv_sec = 0;
+        ts.tv_nsec = 100 * 1000000; // 100ms
+        nanosleep(&ts, NULL);
     }
 }
 
-// try acquire bench index non-blocking (returns index or -1)
 static int bench_try_acquire_index(void) {
     pthread_mutex_lock(&bench_mutex);
     int idx = -1;
@@ -82,7 +83,6 @@ static int bench_try_acquire_index(void) {
     return idx;
 }
 
-// release bench index
 static void bench_release_index(int idx) {
     if (idx < 0 || idx >= num_benches) return;
     pthread_mutex_lock(&bench_mutex);
@@ -91,12 +91,10 @@ static void bench_release_index(int idx) {
     if (external_benches_sem) sem_post(external_benches_sem);
 }
 
-// Tedax thread routine
 static void* tedax_thread_fn(void *arg) {
     tedax_t *self = (tedax_t*)arg;
 
     while (pool_running) {
-        // wait for assignment
         pthread_mutex_lock(&self->lock);
         while (!self->current && pool_running) {
             pthread_cond_wait(&self->cond, &self->lock);
@@ -110,11 +108,10 @@ static void* tedax_thread_fn(void *arg) {
         self->busy = 1;
         self->start_time = time(NULL);
         self->remaining = m->time_required;
-        int assigned_bench = self->bench_id; // may be -1
+        int assigned_bench = self->bench_id; 
 
         pthread_mutex_unlock(&self->lock);
 
-        // occupy bench
         if (assigned_bench < 0) {
             log_event("[T%d] aguardando bancada para M%d...", self->id, m->id);
             assigned_bench = bench_acquire_index_blocking();
@@ -123,7 +120,6 @@ static void* tedax_thread_fn(void *arg) {
             pthread_mutex_unlock(&self->lock);
             log_event("[T%d] bancada %d ocupada para M%d", self->id, assigned_bench, m->id);
         } else {
-            // bench pre-assigned: try to mark it busy (fail -> fallback to acquire blocking)
             int ok = 0;
             pthread_mutex_lock(&bench_mutex);
             if (assigned_bench >= 0 && assigned_bench < num_benches && !bench_busy[assigned_bench]) {
@@ -132,11 +128,14 @@ static void* tedax_thread_fn(void *arg) {
             }
             pthread_mutex_unlock(&bench_mutex);
             if (!ok) {
-                log_event("[T%d] bancada %d ocupada por outro -> procurando outra bancada...", self->id, assigned_bench);
-                // try blocking acquire
+                log_event("[T%d] bancada %d ocupada por outro -> procurando outra...", self->id, assigned_bench);
                 if (external_benches_sem) sem_wait(external_benches_sem);
                 int idx = bench_try_acquire_index();
-                while (idx < 0) { usleep(100000); idx = bench_try_acquire_index(); }
+                while (idx < 0) { 
+                    struct timespec ts = {0, 100000000}; 
+                    nanosleep(&ts, NULL); 
+                    idx = bench_try_acquire_index(); 
+                }
                 assigned_bench = idx;
                 pthread_mutex_lock(&self->lock);
                 self->bench_id = assigned_bench;
@@ -147,7 +146,6 @@ static void* tedax_thread_fn(void *arg) {
             }
         }
 
-        // processing loop
         while (pool_running && self->remaining > 0) {
             sleep(1);
             pthread_mutex_lock(&self->lock);
@@ -156,16 +154,15 @@ static void* tedax_thread_fn(void *arg) {
             pthread_mutex_unlock(&self->lock);
         }
 
-        // decide success: compare instruction with solution (case-insensitive)
         int success = 0;
-        if (!m->instruction || m->instruction[0] == '\0') {
+        // CORREÇÃO: m->instruction é array estático, nunca é NULL. Checar apenas char nulo.
+        if (m->instruction[0] == '\0') {
             success = 0;
         } else {
             if (ci_equal(m->instruction, m->solution)) success = 1;
             else success = 0;
         }
 
-        // free or requeue + release bench
         bench_release_index(assigned_bench);
 
         if (success) {
@@ -188,10 +185,6 @@ static void* tedax_thread_fn(void *arg) {
     return NULL;
 }
 
-// ------------------------------------------------------------
-// Public APIs
-// ------------------------------------------------------------
-
 void tedax_pool_init(int n, sem_t *benches_sem) {
     if (n <= 0) return;
     pthread_mutex_lock(&pool_mutex);
@@ -200,7 +193,6 @@ void tedax_pool_init(int n, sem_t *benches_sem) {
     pool_n = n;
     pool_running = 1;
 
-    // allocate bench_busy array based on NUM_BENCHES macro (or fallback to 2)
 #ifdef NUM_BENCHES
     num_benches = NUM_BENCHES;
 #else
@@ -228,13 +220,11 @@ void tedax_pool_init(int n, sem_t *benches_sem) {
 void tedax_pool_shutdown(void) {
     pool_running = 0;
     if (!pool) return;
-    // wake all threads
     for (int i = 0; i < pool_n; ++i) {
         pthread_mutex_lock(&pool[i].lock);
         pthread_cond_signal(&pool[i].cond);
         pthread_mutex_unlock(&pool[i].lock);
     }
-    // post external sem to prevent deadlocks
     if (external_benches_sem) {
         for (int i=0;i<num_benches;i++) sem_post(external_benches_sem);
     }
@@ -256,7 +246,6 @@ void tedax_pool_destroy(void) {
     log_event("[SYSTEM] Tedax pool destruido");
 }
 
-// assign by id (UI uses this simple API)
 int tedax_assign_module(int id, module_t *m) {
     if (!pool || id < 0 || id >= pool_n || !m) return -1;
     tedax_t *t = &pool[id];
@@ -267,7 +256,7 @@ int tedax_assign_module(int id, module_t *m) {
         return -1;
     }
     t->current = m;
-    t->bench_id = -1; // let thread acquire a bench
+    t->bench_id = -1; 
     t->start_time = time(NULL);
     t->remaining = m->time_required;
     t->busy = 1;
@@ -278,12 +267,9 @@ int tedax_assign_module(int id, module_t *m) {
     return 0;
 }
 
-// Coordinator: auto assign -> pick first free tedax and first free bench and assign
-// returns tedax id or -1 on failure
 int tedax_request_auto(module_t *m) {
     if (!m || !pool) return -1;
 
-    // pick first free tedax
     int chosen = -1;
     for (int i = 0; i < pool_n; ++i) {
         pthread_mutex_lock(&pool[i].lock);
@@ -293,14 +279,11 @@ int tedax_request_auto(module_t *m) {
     }
     if (chosen < 0) return -1;
 
-    // pick first free bench index non-blocking
     int bidx = bench_try_acquire_index();
     if (bidx < 0) {
-        // no bench currently free
         return -1;
     }
 
-    // assign to chosen tedax and set bench id
     pthread_mutex_lock(&pool[chosen].lock);
     pool[chosen].current = m;
     pool[chosen].bench_id = bidx;
@@ -314,13 +297,14 @@ int tedax_request_auto(module_t *m) {
     return chosen;
 }
 
-// Coordinator: manual assign (coordenador supplies tedax id and bench id and presses)
 int tedax_request_manual(module_t *m, int tedax_id, int bench_id, int presses) {
+    // CORREÇÃO: Silenciar unused parameter
+    (void)presses;
+
     if (!m || !pool) return 0;
     if (tedax_id < 0 || tedax_id >= pool_n) return 0;
     if (bench_id < 0 || bench_id >= num_benches) return 0;
 
-    // check tedax availability
     pthread_mutex_lock(&pool[tedax_id].lock);
     if (pool[tedax_id].busy || pool[tedax_id].current) {
         pthread_mutex_unlock(&pool[tedax_id].lock);
@@ -328,7 +312,6 @@ int tedax_request_manual(module_t *m, int tedax_id, int bench_id, int presses) {
     }
     pthread_mutex_unlock(&pool[tedax_id].lock);
 
-    // try reserve bench
     int ok = 0;
     pthread_mutex_lock(&bench_mutex);
     if (!bench_busy[bench_id]) {
@@ -338,7 +321,6 @@ int tedax_request_manual(module_t *m, int tedax_id, int bench_id, int presses) {
     pthread_mutex_unlock(&bench_mutex);
     if (!ok) return 0;
 
-    // assign to tedax
     pthread_mutex_lock(&pool[tedax_id].lock);
     pool[tedax_id].current = m;
     pool[tedax_id].bench_id = bench_id;

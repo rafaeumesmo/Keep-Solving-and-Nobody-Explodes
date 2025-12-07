@@ -8,48 +8,35 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include <ctype.h>
 #include <unistd.h>
 
-#define CMD_MAX 64
+#define CMD_MAX 128
 #define QUEUE_SIZE 64
 
-// ======= FILA DE COMANDOS =======
+// Filas e Threads
 static char queue[QUEUE_SIZE][CMD_MAX];
 static int q_head = 0;
 static int q_tail = 0;
-
 static pthread_mutex_t q_mut = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  q_cond = PTHREAD_COND_INITIALIZER;
-
 static pthread_t coord_thread;
 static int running = 1;
 
-// ======================================================
-// Enfileira comandos chamados pela UI
-// ======================================================
+// --- Implementação da Fila ---
 void coord_enqueue_command(const char *cmd) {
     pthread_mutex_lock(&q_mut);
     int next = (q_tail + 1) % QUEUE_SIZE;
-    if (next == q_head) {
-        // fila cheia -> descarta comando
-        pthread_mutex_unlock(&q_mut);
-        return;
+    if (next != q_head) {
+        strncpy(queue[q_tail], cmd, CMD_MAX);
+        queue[q_tail][CMD_MAX-1] = '\0';
+        q_tail = next;
+        pthread_cond_signal(&q_cond);
     }
-    strncpy(queue[q_tail], cmd, CMD_MAX);
-    queue[q_tail][CMD_MAX-1] = '\0';
-    q_tail = next;
-
-    pthread_cond_signal(&q_cond);
     pthread_mutex_unlock(&q_mut);
 }
 
-// ======================================================
-// Desenfileirar COMANDO
-// ======================================================
 static int dequeue(char *out) {
     pthread_mutex_lock(&q_mut);
-
     while (running && q_head == q_tail) {
         pthread_cond_wait(&q_cond, &q_mut);
     }
@@ -57,102 +44,93 @@ static int dequeue(char *out) {
         pthread_mutex_unlock(&q_mut);
         return 0;
     }
-
     strncpy(out, queue[q_head], CMD_MAX);
     q_head = (q_head + 1) % QUEUE_SIZE;
-
     pthread_mutex_unlock(&q_mut);
     return 1;
 }
 
-// ======================================================
-// TRATAR COMANDOS
-// ======================================================
+// --- Tratamento de Comandos ---
 
-static void handle_auto_assign() {
+// [A] Auto Assign genérico (pega o primeiro do mural)
+static void handle_auto_assign_generic() {
     module_t *m = mural_pop();
     if (!m) {
-        log_event("[COORD] Nenhum modulo para atribuir.");
+        log_event("[COORD] Mural vazio, nada a atribuir.");
         return;
     }
-    int bench = tedax_request_auto(m);
-    if (bench < 0) {
-        log_event("[COORD] Nenhuma bancada disponivel para M%d", m->id);
+    
+    // Tenta atribuir a qualquer Tedax/Bancada livre
+    int tid = tedax_request_auto(m);
+    if (tid < 0) {
+        log_event("[COORD] Sem recursos (Tedax/Bancada) p/ M%d. Re-enfileirado.", m->id);
         mural_requeue(m);
     } else {
-        log_event("[COORD] M%d enviado automaticamente para bancada %d", m->id, bench);
+        log_event("[COORD] Auto: M%d -> T%d", m->id, tid);
     }
 }
 
-static void handle_manual(const char *cmd) {
-    // Formato esperado:
-    //   <tedax><tipo><bancada><presses...>
-    // Exemplo:
-    //   3f2pp
-    //   T=3 tipo=f bancada=2 presses=pp
-    int len = strlen(cmd);
-    if (len < 4) {
-        log_event("[COORD] comando manual invalido: %s", cmd);
+// [M] Manual Assign (ID específico + Instrução)
+// Formato do comando: "M <id> <instrução...>"
+static void handle_manual_assign(const char *cmd) {
+    int m_id;
+    char instr[64];
+
+    // Faz o parse da string "M 12 CUT 1"
+    if (sscanf(cmd, "M %d %[^\n]", &m_id, instr) < 2) {
+        log_event("[COORD] Erro formato comando: %s", cmd);
         return;
     }
 
-    int t = cmd[0] - '0';
-    char type = cmd[1];
-    int b = cmd[2] - '0';
-    int presses = len - 3;
-
-    // encontrar modulo correspondente no mural
-    module_t *m = mural_find_by_tedax_type(t, type);
+    // Tenta retirar o módulo específico do mural
+    module_t *m = mural_pop_by_id(m_id);
     if (!m) {
-        log_event("[COORD] Nenhum modulo combina com %s", cmd);
+        log_event("[COORD] Falha: M%d nao encontrado no mural.", m_id);
         return;
     }
 
-    // tentar enviar ao tedax
-    int ok = tedax_request_manual(m, t, b, presses);
-    if (!ok) {
-        log_event("[COORD] Bancada %d ocupada ou invalida.", b);
+    // Grava a instrução dada pelo jogador
+    snprintf(m->instruction, sizeof(m->instruction), "%s", instr);
+
+    // Solicita um Tedax (usa lógica auto para achar quem está livre)
+    int tid = tedax_request_auto(m);
+    
+    if (tid < 0) {
+        log_event("[COORD] M%d (ID) sem Tedax livre. Re-enfileirado.", m_id);
         mural_requeue(m);
     } else {
-        log_event("[COORD] M%d enviado manualmente p/ T%d B%d (%d presses)",
-                  m->id, t, b, presses);
+        log_event("[COORD] Manual: M%d -> T%d (Instr: %s)", m_id, tid, instr);
     }
 }
 
-// ======================================================
-// THREAD DO COORDENADOR
-// ======================================================
 static void* coordinator_fn(void *arg) {
     (void)arg;
-
     char cmd[CMD_MAX];
 
     while (running) {
-        if (!dequeue(cmd))
-            continue;
+        if (!dequeue(cmd)) continue;
 
-        if (strcmp(cmd, "a") == 0) {
-            handle_auto_assign();
+        if (cmd[0] == 'A' || cmd[0] == 'a') {
+            handle_auto_assign_generic();
+        } 
+        else if (cmd[0] == 'M') {
+            handle_manual_assign(cmd);
         }
-        else if (strcmp(cmd, "q") == 0) {
+        else if (cmd[0] == 'Q' || cmd[0] == 'q') {
             running = 0;
             break;
         }
         else {
-            handle_manual(cmd);
+            log_event("[COORD] Comando desconhecido: %s", cmd);
         }
     }
     return NULL;
 }
 
-// ======================================================
-// PUBLIC FUNCTIONS
-// ======================================================
-
 int coord_start(void) {
     running = 1;
     if (pthread_create(&coord_thread, NULL, coordinator_fn, NULL) != 0) {
-        perror("pthread_create");
+        perror("pthread_create coord");
         return 1;
     }
     return 0;

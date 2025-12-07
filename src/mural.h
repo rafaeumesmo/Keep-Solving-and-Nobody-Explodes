@@ -32,5 +32,7 @@ module_t* mural_peek_list(void);
 int mural_count(void); 
 module_t* mural_pop(void);
 module_t* mural_find_by_tedax_type(int tedax_id, char type);
+void mural_lock_access(void);
+void mural_unlock_access(void);
 
 #endif // MURAL_H

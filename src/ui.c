@@ -3,12 +3,14 @@
 #include "mural.h"
 #include "tedax.h"
 #include "config.h"
+#include "coordinator.h" 
 
 #include <ncurses.h>
 #include <pthread.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h> // CORREÇÃO: Necessário para strcasecmp
 #include <time.h>
 #include <unistd.h>
 
@@ -61,17 +63,20 @@ static void seconds_to_mmss(int s, char *buf, int len) {
 }
 
 static void draw_header(int cols) {
+    (void)cols; // CORREÇÃO: Silencia unused parameter
     werase(w_header);
     wattron(w_header, A_BOLD | COLOR_PAIR(CP_HEADER));
     mvwprintw(w_header, 0, 2, " LAST SPROUT - BOMB PANEL ");
     wattroff(w_header, A_BOLD | COLOR_PAIR(CP_HEADER));
-    // timer center (game clock shown by main thread via log_event)
     wrefresh(w_header);
 }
 
 static void draw_mural_panel() {
     draw_border_title(w_mural, " MODULOS ATIVOS ");
     int row = 1;
+    
+    mural_lock_access();
+    
     module_t *cur = mural_peek_list();
     time_t now = time(NULL);
     int maxr = getmaxy(w_mural)-2;
@@ -80,7 +85,6 @@ static void draw_mural_panel() {
         char tbuf[8]; seconds_to_mmss(cur->time_required, tbuf, sizeof(tbuf));
         int remaining_to_timeout = cur->timeout_secs - age;
 
-        // choose color/attr for urgent
         if (remaining_to_timeout <= 10) {
             wattron(w_mural, A_BLINK | COLOR_PAIR(CP_ERR));
         } else if (remaining_to_timeout <= 20) {
@@ -89,14 +93,14 @@ static void draw_mural_panel() {
             wattron(w_mural, COLOR_PAIR(CP_OK));
         }
 
-        // visual bar based on time_required
         int barlen = 12;
         int filled = (cur->time_required > 0) ? (barlen * (cur->time_required - remaining_to_timeout) / (cur->time_required + 1)) : 0;
         if (filled < 0) filled = 0;
         if (filled > barlen) filled = barlen;
 
         char bar[32]; int p = 0;
-        for (int i=0;i<barlen;i++) bar[p++] = (i < filled ? '■' : '·');
+        // CORREÇÃO: Usar ASCII para evitar warning de multi-character e bugs visuais
+        for (int i=0;i<barlen;i++) bar[p++] = (i < filled ? '#' : '.');
         bar[p]=0;
 
         mvwprintw(w_mural, row++, 1, "ID:%-3d | %-7s | T:%2ds | %s | %2ds",
@@ -109,6 +113,9 @@ static void draw_mural_panel() {
         wattroff(w_mural, A_BLINK | COLOR_PAIR(CP_ERR) | COLOR_PAIR(CP_WARN) | COLOR_PAIR(CP_OK));
         cur = cur->next;
     }
+    
+    mural_unlock_access();
+    
     wrefresh(w_mural);
 }
 
@@ -127,16 +134,17 @@ static void draw_tedax_panel() {
             if (filled < 0) filled = 0;
             if (filled > barlen) filled = barlen;
             char bar[40]; int p=0;
-            for (int k=0;k<barlen;k++) bar[p++] = (k < filled ? '■' : '·');
+            // CORREÇÃO: ASCII
+            for (int k=0;k<barlen;k++) bar[p++] = (k < filled ? '#' : '.');
             bar[p]=0;
             wattron(w_tedax, COLOR_PAIR(CP_ACCENT));
-            mvwprintw(w_tedax, row++, 1, "T%d: [●] %s (%2ds left) [%s]", t->id,
-                      (t->current->type==MOD_FIOS?"✂ FIOS":(t->current->type==MOD_BOTAO?"⚪ BOTAO":"⌨ SENHAS")),
+            mvwprintw(w_tedax, row++, 1, "T%d: [O] %s (%2ds left) [%s]", t->id,
+                      (t->current->type==MOD_FIOS?"FIOS":(t->current->type==MOD_BOTAO?"BOTAO":"SENHAS")),
                       rem, bar);
             wattroff(w_tedax, COLOR_PAIR(CP_ACCENT));
         } else {
             wattron(w_tedax, COLOR_PAIR(CP_OK));
-            mvwprintw(w_tedax, row++, 1, "T%d: [○] Disponivel", t->id);
+            mvwprintw(w_tedax, row++, 1, "T%d: [ ] Disponivel", t->id);
             wattroff(w_tedax, COLOR_PAIR(CP_OK));
         }
         pthread_mutex_unlock(&t->lock);
@@ -146,9 +154,6 @@ static void draw_tedax_panel() {
 
 static void draw_bench_panel() {
     draw_border_title(w_bench, " BANCADAS ");
-    // get number of busy benches by checking tedax occupying benches — we don't have direct benches state here.
-    // Show stylized slots: NUM_BENCHES slots, mark as occupied count of active semaphores used.
-    // Since sem_t doesn't give value portably, we approximate via tedax busy count.
     int occupied = 0;
     int n = tedax_count();
     for (int i=0;i<n;i++) {
@@ -166,7 +171,8 @@ static void draw_bench_panel() {
     char bar[64];
     for (int i=0;i<NUM_BENCHES && p < barlen; i++) {
         for (int j=0;j<barlen/NUM_BENCHES && p<barlen; j++) {
-            bar[p++] = (i < occupied ? '■' : '·');
+            // CORREÇÃO: ASCII
+            bar[p++] = (i < occupied ? '#' : '.');
         }
     }
     bar[p] = 0;
@@ -184,10 +190,9 @@ static void draw_log_panel() {
         if (idx < 0) break;
         char *entry = logbuf[idx];
         if (entry) {
-            // color by symbols in entry
-            if (strstr(entry, "✖") || strstr(entry, "FALHOU") || strstr(entry, "ATENCAO"))
+            if (strstr(entry, "x") || strstr(entry, "FALHOU") || strstr(entry, "ATENCAO"))
                 wattron(w_log, COLOR_PAIR(CP_ERR));
-            else if (strstr(entry, "ATENÇÃO") || strstr(entry, "!!") || strstr(entry, "CUIDADO"))
+            else if (strstr(entry, "ATENCAO") || strstr(entry, "!!") || strstr(entry, "CUIDADO"))
                 wattron(w_log, COLOR_PAIR(CP_WARN));
             else
                 wattron(w_log, COLOR_PAIR(CP_OK));
@@ -204,17 +209,16 @@ static void draw_log_panel() {
 static void draw_cmd_panel() {
     draw_border_title(w_cmd, " COMANDOS ");
     mvwprintw(w_cmd, 1, 2, "[A] Auto-assign  |  [D] Designar por ID  |  [Q] Sair");
-    mvwprintw(w_cmd, 2, 2, "Modo bomba: vermelho = crítico (timeout <10s)");
+    mvwprintw(w_cmd, 2, 2, "Modo bomba: vermelho = critico (timeout <10s)");
     wrefresh(w_cmd);
 }
 
-// UI thread main loop
 static void* ui_thread_fn(void *arg) {
     (void)arg;
     initscr();
     start_color();
     use_default_colors();
-    // color pairs
+    
     init_pair(CP_DEFAULT, COLOR_WHITE, -1);
     init_pair(CP_TITLE, COLOR_CYAN, -1);
     init_pair(CP_HEADER, COLOR_YELLOW, -1);
@@ -231,7 +235,6 @@ static void* ui_thread_fn(void *arg) {
 
     int H = LINES, W = COLS;
 
-    // create windows (layout)
     w_header = newwin(1, W, 0, 0);
     w_mural  = newwin(H/2 - 1, W, 1, 0);
     w_tedax  = newwin(H/2 - 3, W/2, H/2, 0);
@@ -252,147 +255,82 @@ static void* ui_thread_fn(void *arg) {
         if (ch == 'q' || ch == 'Q') {
             ui_running = 0;
             break;
-        } else if (ch == 'a' || ch == 'A') {
-            // auto assign: pop first module and try assign to first free tedax
-            module_t *m = mural_pop_front();
-            if (m) {
-                int n = tedax_count();
-                int assigned = -1;
-                for (int i=0;i<n;i++) {
-                    if (tedax_assign_module(i, m) == 0) { assigned = i; break; }
-                }
-                if (assigned >= 0) log_event("[UI] Auto-assign M%d → T%d", m->id, assigned);
-                else {
-                    mural_requeue(m);
-                    log_event("[UI] Auto-assign falhou: nenhum Tédax livre");
-                }
-            } else {
-                log_event("[UI] Auto-assign: mural vazio");
-            }
-        } else if (ch == 'd' || ch == 'D') {
-    // prompt blocking for ID
-    echo();
-    nodelay(stdscr, FALSE);
-    char s[64];
-    werase(w_cmd);
-    draw_border_title(w_cmd, " COMANDOS ");
-    mvwprintw(w_cmd, 1, 2, "Digite ID do modulo e ENTER: ");
-    wrefresh(w_cmd);
-    wgetnstr(w_cmd, s, 15);
-    int id = atoi(s);
-
-    // pop the module by id (non-blocking)
-    module_t *m = mural_pop_by_id(id);
-    if (!m) {
-        log_event("[UI] M%d nao encontrado no mural", id);
-        noecho();
-        nodelay(stdscr, TRUE);
-    } else {
-        // ask assign or solve
-        werase(w_cmd);
-        draw_border_title(w_cmd, " MODULO ");
-        mvwprintw(w_cmd, 1, 2, "M%d selecionado. [A]ssign p/ Tedax  [S]olve agora", m->id);
-        wrefresh(w_cmd);
-        int choice = 0;
-        while (1) {
-            int c = wgetch(w_cmd);
-            if (c == 'a' || c == 'A') { choice = 'A'; break; }
-            if (c == 's' || c == 'S') { choice = 'S'; break; }
-            // small sleep to avoid busy loop
-            struct timespec t; t.tv_sec=0; t.tv_nsec=100*1000000; nanosleep(&t,NULL);
-        }
-
-        if (choice == 'A') {
-            // Assign to Tedax: ask instruction to pass
+        } 
+        else if (ch == 'a' || ch == 'A') {
+            coord_enqueue_command("A");
+            log_event("[UI] Solicitado Auto-Assign...");
+        } 
+        else if (ch == 'd' || ch == 'D') {
+            echo();
+            nodelay(stdscr, FALSE);
+            char s[64];
             werase(w_cmd);
-            draw_border_title(w_cmd, " DESIGNAR ");
-            mvwprintw(w_cmd, 1, 2, "Digite instrução para o Tedax (ex: CUT 2 | BLUE HOLD | WORD CAT): ");
+            draw_border_title(w_cmd, " COMANDOS ");
+            mvwprintw(w_cmd, 1, 2, "Digite ID do modulo: ");
             wrefresh(w_cmd);
-            char instr[64];
-            wgetnstr(w_cmd, instr, 60);
-            // store instruction in module
-            snprintf(m->instruction, sizeof(m->instruction), "%s", instr);
+            wgetnstr(w_cmd, s, 15);
+            int id = atoi(s);
 
-            // assign to first free tedax
-            int n = tedax_count();
-            int assigned = -1;
-            for (int i=0;i<n;i++) {
-                if (tedax_assign_module(i, m) == 0) { assigned = i; break; }
-            }
-            if (assigned >= 0) {
-                log_event("[UI] M%d → T%d (instr: %s)", m->id, assigned, m->instruction);
-            } else {
-                mural_requeue(m);
-                log_event("[UI] nenhum TÉDAX livre — re-enfileirado M%d", m->id);
-            }
-            noecho();
-            nodelay(stdscr, TRUE);
-        } else {
-            // Solve now (player solves interactively)
+            // Pergunta: Assign ou Solve?
             werase(w_cmd);
-            draw_border_title(w_cmd, " RESOLVER AGORA ");
-            // present minigame according to type
-            if (m->type == MOD_FIOS) {
-                mvwprintw(w_cmd,1,2,"M%d - FIOS: existem N fios. Instrução esperada: CUT <n>", m->id);
-                mvwprintw(w_cmd,2,2,"Digite instrução (ex: CUT 2): ");
+            draw_border_title(w_cmd, " MODULO ");
+            mvwprintw(w_cmd, 1, 2, "M%d: [A]ssign p/ Tedax  [S]olve agora", id);
+            wrefresh(w_cmd);
+            
+            int choice = 0;
+            while (1) {
+                int c = wgetch(w_cmd);
+                if (c == 'a' || c == 'A') { choice = 'A'; break; }
+                if (c == 's' || c == 'S') { choice = 'S'; break; }
+                struct timespec t; t.tv_sec=0; t.tv_nsec=50*1000000; nanosleep(&t,NULL);
+            }
+
+            if (choice == 'A') {
+                // Modo Coordenador (Thread)
+                werase(w_cmd);
+                draw_border_title(w_cmd, " DESIGNAR ");
+                mvwprintw(w_cmd, 1, 2, "Instrucao (ex: CUT 2): ");
                 wrefresh(w_cmd);
-                char ans[64];
-                wgetnstr(w_cmd, ans, 60);
-                // compare answer with solution (case-insensitive)
-                char a_low[128], s_low[128];
-                snprintf(a_low,sizeof(a_low),"%s",ans);
-                snprintf(s_low,sizeof(s_low),"%s",m->solution);
-                for (char *p=a_low; *p; ++p) if (*p>='A' && *p<='Z') *p = *p - 'A' + 'a';
-                for (char *p=s_low; *p; ++p) if (*p>='A' && *p<='Z') *p = *p - 'A' + 'a';
-                if (strcmp(a_low, s_low) == 0) {
-                    log_event("[PLAYER] M%d resolvido com sucesso (YOU)", m->id);
-                    free(m);
+                
+                char instr[64];
+                wgetnstr(w_cmd, instr, 60);
+
+                char cmd_str[128];
+                snprintf(cmd_str, sizeof(cmd_str), "M %d %s", id, instr);
+                
+                coord_enqueue_command(cmd_str);
+                log_event("[UI] Enviado para Coord: M%d", id);
+
+                noecho();
+                nodelay(stdscr, TRUE);
+            } 
+            else {
+                // Modo Jogador
+                module_t *m = mural_pop_by_id(id);
+                if (!m) {
+                    log_event("[UI] M%d nao encontrado ou ja resolvido", id);
                 } else {
-                    log_event("[PLAYER] M%d resolucao INCORRETA — requeue", m->id);
-                    mural_requeue(m);
+                    werase(w_cmd);
+                    draw_border_title(w_cmd, " RESOLVER AGORA ");
+                    mvwprintw(w_cmd, 1, 2, "Tipo: %d. Solucao: %s", m->type, m->solution);
+                    mvwprintw(w_cmd, 2, 2, "Digite a solucao: ");
+                    wrefresh(w_cmd);
+                    
+                    char ans[64];
+                    wgetnstr(w_cmd, ans, 60);
+                    
+                    if (strcasecmp(ans, m->solution) == 0) {
+                        log_event("[PLAYER] M%d resolvido com sucesso!", m->id);
+                        free(m);
+                    } else {
+                        log_event("[PLAYER] Errou! M%d voltou pro mural.", m->id);
+                        mural_requeue(m);
+                    }
                 }
-            } else if (m->type == MOD_BOTAO) {
-                mvwprintw(w_cmd,1,2,"M%d - BOTAO: instrução esperada (ex: BLUE HOLD or RED PRESS)", m->id);
-                mvwprintw(w_cmd,2,2,"Digite instrução: ");
-                wrefresh(w_cmd);
-                char ans[64];
-                wgetnstr(w_cmd, ans, 60);
-                char a_low[128], s_low[128];
-                snprintf(a_low,sizeof(a_low),"%s",ans);
-                snprintf(s_low,sizeof(s_low),"%s",m->solution);
-                for (char *p=a_low; *p; ++p) if (*p>='A' && *p<='Z') *p = *p - 'A' + 'a';
-                for (char *p=s_low; *p; ++p) if (*p>='A' && *p<='Z') *p = *p - 'A' + 'a';
-                if (strcmp(a_low, s_low) == 0) {
-                    log_event("[PLAYER] M%d resolvido com sucesso (YOU)", m->id);
-                    free(m);
-                } else {
-                    log_event("[PLAYER] M%d resolucao INCORRETA — requeue", m->id);
-                    mural_requeue(m);
-                }
-            } else { // SENHAS
-                mvwprintw(w_cmd,1,2,"M%d - SENHAS: digite a palavra correta (ex: WORD CAT -> responda WORD CAT)", m->id);
-                mvwprintw(w_cmd,2,2,"Digite instrução: ");
-                wrefresh(w_cmd);
-                char ans[64];
-                wgetnstr(w_cmd, ans, 60);
-                char a_low[128], s_low[128];
-                snprintf(a_low,sizeof(a_low),"%s",ans);
-                snprintf(s_low,sizeof(s_low),"%s",m->solution);
-                for (char *p=a_low; *p; ++p) if (*p>='A' && *p<='Z') *p = *p - 'A' + 'a';
-                for (char *p=s_low; *p; ++p) if (*p>='A' && *p<='Z') *p = *p - 'A' + 'a';
-                if (strcmp(a_low, s_low) == 0) {
-                    log_event("[PLAYER] M%d resolvido com sucesso (YOU)", m->id);
-                    free(m);
-                } else {
-                    log_event("[PLAYER] M%d resolucao INCORRETA — requeue", m->id);
-                    mural_requeue(m);
-                }
-            } // end type cases
-            noecho();
-            nodelay(stdscr, TRUE);
-        } // end if assign/solve
-    } // end if m exists
-} // end case D
+                noecho();
+                nodelay(stdscr, TRUE);
+            }
+        }
 
         struct timespec ts;
         ts.tv_sec = 0;
@@ -400,19 +338,13 @@ static void* ui_thread_fn(void *arg) {
         nanosleep(&ts, NULL);
     }
 
-    // cleanup windows
-    delwin(w_header);
-    delwin(w_mural);
-    delwin(w_tedax);
-    delwin(w_bench);
-    delwin(w_log);
-    delwin(w_cmd);
+    delwin(w_header); delwin(w_mural); delwin(w_tedax);
+    delwin(w_bench);  delwin(w_log);   delwin(w_cmd);
     endwin();
     return NULL;
 }
 
 void ui_start(void) {
-    // init log buffer
     for (int i=0;i<LOG_LINES;i++) { logbuf[i] = NULL; }
     pthread_create(&ui_thread, NULL, ui_thread_fn, NULL);
     log_event("[SYSTEM] UI iniciado");
@@ -421,8 +353,6 @@ void ui_start(void) {
 void ui_stop(void) {
     ui_running = 0;
     pthread_join(ui_thread, NULL);
-
-    // free log entries
     pthread_mutex_lock(&log_lock);
     for (int i=0;i<LOG_LINES;i++) {
         if (logbuf[i]) { free(logbuf[i]); logbuf[i] = NULL; }
