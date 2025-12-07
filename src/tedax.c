@@ -61,7 +61,6 @@ static int bench_acquire_index_blocking(void) {
         pthread_mutex_unlock(&bench_mutex);
         if (idx >= 0) return idx;
         
-        // CORREÇÃO: Usar nanosleep em vez de usleep (deprecated em POSIX 2008)
         struct timespec ts;
         ts.tv_sec = 0;
         ts.tv_nsec = 100 * 1000000; // 100ms
@@ -112,7 +111,9 @@ static void* tedax_thread_fn(void *arg) {
 
         pthread_mutex_unlock(&self->lock);
 
+        // --- CORREÇÃO DO BUG AQUI ---
         if (assigned_bench < 0) {
+            // Se não veio bancada pré-definida, busca uma (bloqueante)
             log_event("[T%d] aguardando bancada para M%d...", self->id, m->id);
             assigned_bench = bench_acquire_index_blocking();
             pthread_mutex_lock(&self->lock);
@@ -120,31 +121,12 @@ static void* tedax_thread_fn(void *arg) {
             pthread_mutex_unlock(&self->lock);
             log_event("[T%d] bancada %d ocupada para M%d", self->id, assigned_bench, m->id);
         } else {
-            int ok = 0;
-            pthread_mutex_lock(&bench_mutex);
-            if (assigned_bench >= 0 && assigned_bench < num_benches && !bench_busy[assigned_bench]) {
-                bench_busy[assigned_bench] = 1;
-                ok = 1;
-            }
-            pthread_mutex_unlock(&bench_mutex);
-            if (!ok) {
-                log_event("[T%d] bancada %d ocupada por outro -> procurando outra...", self->id, assigned_bench);
-                if (external_benches_sem) sem_wait(external_benches_sem);
-                int idx = bench_try_acquire_index();
-                while (idx < 0) { 
-                    struct timespec ts = {0, 100000000}; 
-                    nanosleep(&ts, NULL); 
-                    idx = bench_try_acquire_index(); 
-                }
-                assigned_bench = idx;
-                pthread_mutex_lock(&self->lock);
-                self->bench_id = assigned_bench;
-                pthread_mutex_unlock(&self->lock);
-                log_event("[T%d] bancada alternativa %d ocupada para M%d", self->id, assigned_bench, m->id);
-            } else {
-                log_event("[T%d] bancada %d confirmada para M%d", self->id, assigned_bench, m->id);
-            }
+            // Se já veio pré-definida pelo Coordenador (Auto/Manual),
+            // CONFIAMOS que ela já está marcada como ocupada no array bench_busy.
+            // Não tentamos marcar de novo, apenas usamos.
+            log_event("[T%d] bancada %d confirmada (pre-assign) M%d", self->id, assigned_bench, m->id);
         }
+        // ----------------------------
 
         while (pool_running && self->remaining > 0) {
             sleep(1);
@@ -155,7 +137,6 @@ static void* tedax_thread_fn(void *arg) {
         }
 
         int success = 0;
-        // CORREÇÃO: m->instruction é array estático, nunca é NULL. Checar apenas char nulo.
         if (m->instruction[0] == '\0') {
             success = 0;
         } else {
@@ -279,6 +260,7 @@ int tedax_request_auto(module_t *m) {
     }
     if (chosen < 0) return -1;
 
+    // AQUI: Marcamos a bancada como ocupada imediatamente
     int bidx = bench_try_acquire_index();
     if (bidx < 0) {
         return -1;
@@ -298,7 +280,6 @@ int tedax_request_auto(module_t *m) {
 }
 
 int tedax_request_manual(module_t *m, int tedax_id, int bench_id, int presses) {
-    // CORREÇÃO: Silenciar unused parameter
     (void)presses;
 
     if (!m || !pool) return 0;
@@ -312,6 +293,7 @@ int tedax_request_manual(module_t *m, int tedax_id, int bench_id, int presses) {
     }
     pthread_mutex_unlock(&pool[tedax_id].lock);
 
+    // Manualmente reservando a bancada (marcando ocupada)
     int ok = 0;
     pthread_mutex_lock(&bench_mutex);
     if (!bench_busy[bench_id]) {
