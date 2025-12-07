@@ -13,6 +13,7 @@ static module_t *mural_tail = NULL;
 
 pthread_mutex_t mural_lock = PTHREAD_MUTEX_INITIALIZER;
 static int mural_size = 0;
+static int global_score = 0;
 
 // =====================================================
 //  Criação de Módulos
@@ -228,4 +229,18 @@ void mural_lock_access(void) {
 
 void mural_unlock_access(void) {
     pthread_mutex_unlock(&mural_lock);
+}
+
+void mural_add_score(void) {
+    pthread_mutex_lock(&mural_lock);
+    global_score++;
+    pthread_mutex_unlock(&mural_lock);
+}
+
+int mural_get_score(void) {
+    int s;
+    pthread_mutex_lock(&mural_lock);
+    s = global_score;
+    pthread_mutex_unlock(&mural_lock);
+    return s;
 }

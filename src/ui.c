@@ -66,7 +66,7 @@ static void draw_header(int cols) {
     (void)cols; // CORREÇÃO: Silencia unused parameter
     werase(w_header);
     wattron(w_header, A_BOLD | COLOR_PAIR(CP_HEADER));
-    mvwprintw(w_header, 0, 2, " LAST SPROUT - BOMB PANEL ");
+    mvwprintw(w_header, 0, 2, " LAST SPROUT - BOMB PANEL | SCORE: %d ", mural_get_score());
     wattroff(w_header, A_BOLD | COLOR_PAIR(CP_HEADER));
     wrefresh(w_header);
 }
@@ -321,6 +321,7 @@ static void* ui_thread_fn(void *arg) {
                     
                     if (strcasecmp(ans, m->solution) == 0) {
                         log_event("[PLAYER] M%d resolvido com sucesso!", m->id);
+                        mural_add_score();
                         free(m);
                     } else {
                         log_event("[PLAYER] Errou! M%d voltou pro mural.", m->id);

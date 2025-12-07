@@ -148,6 +148,7 @@ static void* tedax_thread_fn(void *arg) {
 
         if (success) {
             log_event("[T%d] ✔ M%d DESARMADO", self->id, m->id);
+            mural_add_score();
             free(m);
         } else {
             log_event("[T%d] ✖ M%d FALHOU — re-enfileirado", self->id, m->id);

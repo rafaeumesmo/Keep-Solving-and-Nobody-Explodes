@@ -237,5 +237,6 @@ int main(void) {
     sem_destroy(&benches_sem);
 
     printf("Jogo finalizado. Obrigado!\n");
+    printf(">>> PLACAR FINAL: %d Modulos Desarmados <<<\n", mural_get_score()); // <--- AQUI
     return 0;
 }
