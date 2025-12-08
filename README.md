@@ -239,6 +239,8 @@ Cada modo ajusta:
 ## 👨‍💻 Autor
 
 **Rafael Severo**  
+**Pedro Fontana**  
+
 Disciplina de **Programação Concorrente** — 2025  
 
 ---
