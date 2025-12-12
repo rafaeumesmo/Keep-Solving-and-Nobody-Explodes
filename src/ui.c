@@ -76,9 +76,16 @@ static void draw_header(int cols) {
     (void)cols; 
     werase(w_header);
     wattron(w_header, A_BOLD | COLOR_PAIR(CP_HEADER));
-    // Mostra Score e Dinheiro (assumindo que mural_get_money existe no mural.h atualizado)
-    mvwprintw(w_header, 0, 2, " LAST SPROUT - BOMB PANEL | SCORE: %d | GOLD: %d ", 
-              mural_get_score(), mural_get_money());
+    
+    // NOVO: Pega o tempo restante do mural e formata
+    int rem = mural_get_remaining_seconds();
+    char tbuf[16];
+    seconds_to_mmss(rem, tbuf, sizeof(tbuf));
+
+    // Mostra Score, Dinheiro e TEMPO
+    mvwprintw(w_header, 0, 2, " LAST SPROUT - BOMB PANEL | SCORE: %d | GOLD: %d | TIME: %s ", 
+              mural_get_score(), mural_get_money(), tbuf);
+
     wattroff(w_header, A_BOLD | COLOR_PAIR(CP_HEADER));
     wrefresh(w_header);
 }

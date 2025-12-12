@@ -12,9 +12,8 @@ typedef struct module {
     time_t created_at;
     int timeout_secs;
 
-    // NOVOS CAMPOS:
-    char solution[64];     // string que representa a solução correta do módulo
-    char instruction[64];  // string com a instrução dada pelo coordenador (p/ Tedax)
+    char solution[64];     
+    char instruction[64];  
 
     struct module *next;
 } module_t;
@@ -34,10 +33,18 @@ module_t* mural_pop(void);
 module_t* mural_find_by_tedax_type(int tedax_id, char type);
 void mural_lock_access(void);
 void mural_unlock_access(void);
+
+// Score e Dinheiro
 void mural_add_score(void);
 int mural_get_score(void);
 void mural_add_money(int amount);
 int mural_get_money(void);
+
+// Interface
 module_t* mural_get_by_index(int index);
+
+// NOVO: Timer Global
+void mural_setup_timer(int duration_seconds);
+int mural_get_remaining_seconds(void);
 
 #endif // MURAL_H
