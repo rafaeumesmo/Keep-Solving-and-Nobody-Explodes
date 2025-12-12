@@ -14,6 +14,9 @@ static module_t *mural_tail = NULL;
 pthread_mutex_t mural_lock = PTHREAD_MUTEX_INITIALIZER;
 static int mural_size = 0;
 static int global_score = 0;
+static int global_money = 0; // Inicializar com MOEDAS_INICIAL se preferir
+
+
 
 // =====================================================
 //  Criação de Módulos
@@ -243,4 +246,32 @@ int mural_get_score(void) {
     s = global_score;
     pthread_mutex_unlock(&mural_lock);
     return s;
+}
+
+// NOVO: Função auxiliar para pegar módulo pelo índice visual (para as setas da UI)
+module_t* mural_get_by_index(int index) {
+    pthread_mutex_lock(&mural_lock);
+    module_t *cur = mural_head;
+    int i = 0;
+    while (cur && i < index) {
+        cur = cur->next;
+        i++;
+    }
+    pthread_mutex_unlock(&mural_lock);
+    return cur; // Retorna NULL se index for inválido
+}
+
+// NOVAS: Funções de dinheiro
+void mural_add_money(int amount) {
+    pthread_mutex_lock(&mural_lock);
+    global_money += amount;
+    pthread_mutex_unlock(&mural_lock);
+}
+
+int mural_get_money(void) {
+    int m;
+    pthread_mutex_lock(&mural_lock);
+    m = global_money;
+    pthread_mutex_unlock(&mural_lock);
+    return m;
 }

@@ -130,6 +130,22 @@ static void* tedax_thread_fn(void *arg) {
 
         while (pool_running && self->remaining > 0) {
             sleep(1);
+
+            // --- [MODIFICAÇÃO] Timeout em Tempo Real ---
+            // Se o módulo expirar enquanto está sendo processado, explode na mão
+            time_t now = time(NULL);
+            if (now > (m->created_at + m->timeout_secs)) {
+                log_event("[T%d] 💥 M%d EXPLODIU na mao! (Timeout)", self->id, m->id);
+                
+                // Força saída do loop
+                self->remaining = 0;
+                
+                // Anula instrução para garantir falha na verificação posterior
+                m->instruction[0] = '\0'; 
+                break; 
+            }
+            // -------------------------------------------
+
             pthread_mutex_lock(&self->lock);
             self->remaining = m->time_required - (int)(time(NULL) - self->start_time);
             if (self->remaining < 0) self->remaining = 0;
@@ -147,9 +163,12 @@ static void* tedax_thread_fn(void *arg) {
         bench_release_index(assigned_bench);
 
         if (success) {
-            log_event("[T%d] ✔ M%d DESARMADO", self->id, m->id);
+            // --- [MODIFICAÇÃO] Log de Ouro + Adicionar Moedas ---
+            log_event("[T%d] ✔ M%d DESARMADO (+%d Gold)", self->id, m->id, MOEDAS_POR_MODULO);
             mural_add_score();
+            mural_add_money(MOEDAS_POR_MODULO); // Adiciona dinheiro ao jogador
             free(m);
+            // ----------------------------------------------------
         } else {
             log_event("[T%d] ✖ M%d FALHOU — re-enfileirado", self->id, m->id);
             mural_requeue(m);

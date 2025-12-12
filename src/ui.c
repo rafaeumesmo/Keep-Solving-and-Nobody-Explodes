@@ -10,12 +10,22 @@
 #include <stdarg.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h> // CORREÇÃO: Necessário para strcasecmp
+#include <strings.h> 
 #include <time.h>
 #include <unistd.h>
 
 static pthread_t ui_thread;
 static volatile int ui_running = 0;
+
+// Estados da Interface (Seleção por setas)
+enum { MODE_NORMAL=0, MODE_SEL_MOD, MODE_SEL_TEDAX, MODE_SEL_BENCH };
+static int ui_mode = MODE_NORMAL;
+static int sel_idx = 0; // Índice visual do item selecionado
+
+// IDs capturados durante o fluxo de seleção
+static int selected_mod_id = -1;
+static int selected_tedax_id = -1;
+static int selected_bench_id = -1;
 
 // windows
 static WINDOW *w_header, *w_mural, *w_tedax, *w_bench, *w_log, *w_cmd;
@@ -45,7 +55,7 @@ void log_event(const char *fmt, ...) {
 }
 
 // helper colors
-enum { CP_DEFAULT=1, CP_TITLE, CP_HEADER, CP_OK, CP_WARN, CP_ERR, CP_ACCENT };
+enum { CP_DEFAULT=1, CP_TITLE, CP_HEADER, CP_OK, CP_WARN, CP_ERR, CP_ACCENT, CP_SELECT };
 
 static void draw_border_title(WINDOW *w, const char *title) {
     werase(w);
@@ -63,10 +73,12 @@ static void seconds_to_mmss(int s, char *buf, int len) {
 }
 
 static void draw_header(int cols) {
-    (void)cols; // CORREÇÃO: Silencia unused parameter
+    (void)cols; 
     werase(w_header);
     wattron(w_header, A_BOLD | COLOR_PAIR(CP_HEADER));
-    mvwprintw(w_header, 0, 2, " LAST SPROUT - BOMB PANEL | SCORE: %d ", mural_get_score());
+    // Mostra Score e Dinheiro (assumindo que mural_get_money existe no mural.h atualizado)
+    mvwprintw(w_header, 0, 2, " LAST SPROUT - BOMB PANEL | SCORE: %d | GOLD: %d ", 
+              mural_get_score(), mural_get_money());
     wattroff(w_header, A_BOLD | COLOR_PAIR(CP_HEADER));
     wrefresh(w_header);
 }
@@ -80,11 +92,22 @@ static void draw_mural_panel() {
     module_t *cur = mural_peek_list();
     time_t now = time(NULL);
     int maxr = getmaxy(w_mural)-2;
+    int idx = 0; // Índice para controle de seleção
+
     while (cur && row <= maxr) {
         int age = (int)(now - cur->created_at);
         char tbuf[8]; seconds_to_mmss(cur->time_required, tbuf, sizeof(tbuf));
         int remaining_to_timeout = cur->timeout_secs - age;
 
+        // Lógica de Highlight (Seleção)
+        int is_selected = (ui_mode == MODE_SEL_MOD && idx == sel_idx);
+        
+        if (is_selected) {
+            wattron(w_mural, A_REVERSE | A_BOLD); // Destaque visual
+            mvwprintw(w_mural, row, 1, "->"); // Seta indicativa
+        }
+
+        // Cores de status (Timeout)
         if (remaining_to_timeout <= 10) {
             wattron(w_mural, A_BLINK | COLOR_PAIR(CP_ERR));
         } else if (remaining_to_timeout <= 20) {
@@ -99,11 +122,11 @@ static void draw_mural_panel() {
         if (filled > barlen) filled = barlen;
 
         char bar[32]; int p = 0;
-        // CORREÇÃO: Usar ASCII para evitar warning de multi-character e bugs visuais
         for (int i=0;i<barlen;i++) bar[p++] = (i < filled ? '#' : '.');
         bar[p]=0;
 
-        mvwprintw(w_mural, row++, 1, "ID:%-3d | %-7s | T:%2ds | %s | %2ds",
+        // Imprime linha do módulo
+        mvwprintw(w_mural, row, 4, "ID:%-3d | %-7s | T:%2ds | %s | %2ds",
                   cur->id,
                   (cur->type==MOD_FIOS?"FIOS":(cur->type==MOD_BOTAO?"BOTAO":"SENHAS")),
                   cur->time_required,
@@ -111,7 +134,14 @@ static void draw_mural_panel() {
                   remaining_to_timeout);
 
         wattroff(w_mural, A_BLINK | COLOR_PAIR(CP_ERR) | COLOR_PAIR(CP_WARN) | COLOR_PAIR(CP_OK));
+        
+        if (is_selected) {
+            wattroff(w_mural, A_REVERSE | A_BOLD);
+        }
+
         cur = cur->next;
+        row++;
+        idx++;
     }
     
     mural_unlock_access();
@@ -123,60 +153,80 @@ static void draw_tedax_panel() {
     draw_border_title(w_tedax, " TEDAX ");
     int row = 1;
     int n = tedax_count();
+    
     for (int i=0;i<n;i++) {
         tedax_t *t = tedax_get(i);
+        
+        // Highlight se estiver selecionando Tedax
+        int is_selected = (ui_mode == MODE_SEL_TEDAX && i == sel_idx);
+        if (is_selected) wattron(w_tedax, A_REVERSE | A_BOLD);
+
         pthread_mutex_lock(&t->lock);
         if (t->current) {
             int rem = t->remaining;
             int total = t->current->time_required;
             int barlen = 18;
-            int filled = (int)((double)(total - rem) / (double)total * barlen + 0.5);
+            int filled = (total > 0) ? (int)((double)(total - rem) / (double)total * barlen + 0.5) : 0;
             if (filled < 0) filled = 0;
             if (filled > barlen) filled = barlen;
             char bar[40]; int p=0;
-            // CORREÇÃO: ASCII
             for (int k=0;k<barlen;k++) bar[p++] = (k < filled ? '#' : '.');
             bar[p]=0;
-            wattron(w_tedax, COLOR_PAIR(CP_ACCENT));
-            mvwprintw(w_tedax, row++, 1, "T%d: [O] %s (%2ds left) [%s]", t->id,
+            
+            if(!is_selected) wattron(w_tedax, COLOR_PAIR(CP_ACCENT));
+            mvwprintw(w_tedax, row++, 1, "%sT%d: [O] %s (%2ds) [%s]", 
+                      is_selected ? "->" : "  ",
+                      t->id,
                       (t->current->type==MOD_FIOS?"FIOS":(t->current->type==MOD_BOTAO?"BOTAO":"SENHAS")),
                       rem, bar);
-            wattroff(w_tedax, COLOR_PAIR(CP_ACCENT));
+            if(!is_selected) wattroff(w_tedax, COLOR_PAIR(CP_ACCENT));
+
         } else {
-            wattron(w_tedax, COLOR_PAIR(CP_OK));
-            mvwprintw(w_tedax, row++, 1, "T%d: [ ] Disponivel", t->id);
-            wattroff(w_tedax, COLOR_PAIR(CP_OK));
+            if(!is_selected) wattron(w_tedax, COLOR_PAIR(CP_OK));
+            mvwprintw(w_tedax, row++, 1, "%sT%d: [ ] Disponivel", is_selected ? "->" : "  ", t->id);
+            if(!is_selected) wattroff(w_tedax, COLOR_PAIR(CP_OK));
         }
         pthread_mutex_unlock(&t->lock);
+
+        if (is_selected) wattroff(w_tedax, A_REVERSE | A_BOLD);
     }
     wrefresh(w_tedax);
 }
 
 static void draw_bench_panel() {
     draw_border_title(w_bench, " BANCADAS ");
-    int occupied = 0;
-    int n = tedax_count();
-    for (int i=0;i<n;i++) {
-        tedax_t *t = tedax_get(i);
-        pthread_mutex_lock(&t->lock);
-        if (t->busy && t->current) occupied++;
-        pthread_mutex_unlock(&t->lock);
-    }
-    int freeb = NUM_BENCHES - occupied;
-    if (freeb < 0) freeb = 0;
-    mvwprintw(w_bench, 1, 2, "BANCADAS OCUPADAS: %d / %d", occupied, NUM_BENCHES);
-    // visual bar
-    int barlen = 20;
-    int p = 0;
-    char bar[64];
-    for (int i=0;i<NUM_BENCHES && p < barlen; i++) {
-        for (int j=0;j<barlen/NUM_BENCHES && p<barlen; j++) {
-            // CORREÇÃO: ASCII
-            bar[p++] = (i < occupied ? '#' : '.');
+    int occupied_count = 0;
+    int n_tedax = tedax_count();
+    
+    // Calcula ocupação real verificando os Tedax (alternativa seria exportar bench_busy)
+    // Para simplificar a UI, vamos listar as bancadas pelo ID
+    
+    for (int i=0; i<NUM_BENCHES; i++) {
+        // Verifica se alguém está usando a bancada i
+        int is_busy = 0;
+        for(int t=0; t<n_tedax; t++) {
+            tedax_t *td = tedax_get(t);
+            pthread_mutex_lock(&td->lock);
+            if(td->busy && td->bench_id == i) is_busy = 1;
+            pthread_mutex_unlock(&td->lock);
         }
+        if(is_busy) occupied_count++;
+
+        // Desenha a linha da bancada
+        int is_selected = (ui_mode == MODE_SEL_BENCH && i == sel_idx);
+        if (is_selected) wattron(w_bench, A_REVERSE | A_BOLD);
+
+        if (is_busy) {
+             mvwprintw(w_bench, i+1, 2, "%sBancada %d: [X] OCUPADA", is_selected ? "->" : "  ", i);
+        } else {
+             mvwprintw(w_bench, i+1, 2, "%sBancada %d: [ ] LIVRE", is_selected ? "->" : "  ", i);
+        }
+
+        if (is_selected) wattroff(w_bench, A_REVERSE | A_BOLD);
     }
-    bar[p] = 0;
-    mvwprintw(w_bench, 3, 2, "[%s]", bar);
+
+    // Barra de resumo inferior
+    mvwprintw(w_bench, NUM_BENCHES + 2, 2, "Total: %d/%d", occupied_count, NUM_BENCHES);
     wrefresh(w_bench);
 }
 
@@ -190,7 +240,7 @@ static void draw_log_panel() {
         if (idx < 0) break;
         char *entry = logbuf[idx];
         if (entry) {
-            if (strstr(entry, "x") || strstr(entry, "FALHOU") || strstr(entry, "ATENCAO"))
+            if (strstr(entry, "x") || strstr(entry, "FALHOU") || strstr(entry, "EXPLODIU"))
                 wattron(w_log, COLOR_PAIR(CP_ERR));
             else if (strstr(entry, "ATENCAO") || strstr(entry, "!!") || strstr(entry, "CUIDADO"))
                 wattron(w_log, COLOR_PAIR(CP_WARN));
@@ -208,8 +258,17 @@ static void draw_log_panel() {
 
 static void draw_cmd_panel() {
     draw_border_title(w_cmd, " COMANDOS ");
-    mvwprintw(w_cmd, 1, 2, "[A] Auto-assign  |  [D] Designar por ID  |  [Q] Sair");
-    mvwprintw(w_cmd, 2, 2, "Modo bomba: vermelho = critico (timeout <10s)");
+    
+    if (ui_mode == MODE_NORMAL) {
+        mvwprintw(w_cmd, 1, 2, "[A] Auto | [D] Selecionar Tarefa (Setas) | [Q] Sair");
+    } else if (ui_mode == MODE_SEL_MOD) {
+        mvwprintw(w_cmd, 1, 2, "SELECIONE O MODULO (Setas + ENTER)");
+    } else if (ui_mode == MODE_SEL_TEDAX) {
+        mvwprintw(w_cmd, 1, 2, "SELECIONE O TEDAX (Setas + ENTER)");
+    } else if (ui_mode == MODE_SEL_BENCH) {
+        mvwprintw(w_cmd, 1, 2, "SELECIONE A BANCADA (Setas + ENTER)");
+    }
+    
     wrefresh(w_cmd);
 }
 
@@ -226,6 +285,7 @@ static void* ui_thread_fn(void *arg) {
     init_pair(CP_WARN, COLOR_YELLOW, -1);
     init_pair(CP_ERR, COLOR_RED, -1);
     init_pair(CP_ACCENT, COLOR_MAGENTA, -1);
+    init_pair(CP_SELECT, COLOR_BLACK, COLOR_CYAN);
 
     noecho();
     cbreak();
@@ -252,84 +312,87 @@ static void* ui_thread_fn(void *arg) {
         draw_cmd_panel();
 
         int ch = getch();
-        if (ch == 'q' || ch == 'Q') {
-            ui_running = 0;
-            break;
-        } 
-        else if (ch == 'a' || ch == 'A') {
-            coord_enqueue_command("A");
-            log_event("[UI] Solicitado Auto-Assign...");
-        } 
-        else if (ch == 'd' || ch == 'D') {
-            echo();
-            nodelay(stdscr, FALSE);
-            char s[64];
-            werase(w_cmd);
-            draw_border_title(w_cmd, " COMANDOS ");
-            mvwprintw(w_cmd, 1, 2, "Digite ID do modulo: ");
-            wrefresh(w_cmd);
-            wgetnstr(w_cmd, s, 15);
-            int id = atoi(s);
 
-            // Pergunta: Assign ou Solve?
-            werase(w_cmd);
-            draw_border_title(w_cmd, " MODULO ");
-            mvwprintw(w_cmd, 1, 2, "M%d: [A]ssign p/ Tedax  [S]olve agora", id);
-            wrefresh(w_cmd);
-            
-            int choice = 0;
-            while (1) {
-                int c = wgetch(w_cmd);
-                if (c == 'a' || c == 'A') { choice = 'A'; break; }
-                if (c == 's' || c == 'S') { choice = 'S'; break; }
-                struct timespec t; t.tv_sec=0; t.tv_nsec=50*1000000; nanosleep(&t,NULL);
+        // Máquina de Estados da UI
+        if (ui_mode == MODE_NORMAL) {
+            if (ch == 'q' || ch == 'Q') {
+                ui_running = 0;
+                break;
+            } 
+            else if (ch == 'a' || ch == 'A') {
+                coord_enqueue_command("A");
+                log_event("[UI] Auto-Assign (aleatorio)...");
+            } 
+            else if (ch == 'd' || ch == 'D') {
+                // Inicia modo de seleção visual
+                if (mural_count() > 0) {
+                    ui_mode = MODE_SEL_MOD;
+                    sel_idx = 0;
+                } else {
+                    log_event("[UI] Mural vazio, nada para selecionar.");
+                }
             }
+        }
+        else if (ui_mode == MODE_SEL_MOD) {
+            int count = mural_count();
+            if (count == 0) { ui_mode = MODE_NORMAL; continue; }
 
-            if (choice == 'A') {
-                // Modo Coordenador (Thread)
+            if (ch == KEY_UP) sel_idx = (sel_idx - 1 + count) % count;
+            else if (ch == KEY_DOWN) sel_idx = (sel_idx + 1) % count;
+            else if (ch == 27) ui_mode = MODE_NORMAL; // ESC cancela
+            else if (ch == 10) { // ENTER
+                // Busca ID do módulo selecionado
+                mural_lock_access();
+                module_t *m = mural_peek_list();
+                for(int k=0; k<sel_idx && m; k++) m = m->next;
+                if(m) selected_mod_id = m->id;
+                else selected_mod_id = -1;
+                mural_unlock_access();
+
+                if(selected_mod_id != -1) {
+                    ui_mode = MODE_SEL_TEDAX;
+                    sel_idx = 0;
+                }
+            }
+        }
+        else if (ui_mode == MODE_SEL_TEDAX) {
+            int count = tedax_count();
+            if (ch == KEY_UP) sel_idx = (sel_idx - 1 + count) % count;
+            else if (ch == KEY_DOWN) sel_idx = (sel_idx + 1) % count;
+            else if (ch == 27) ui_mode = MODE_NORMAL;
+            else if (ch == 10) {
+                selected_tedax_id = sel_idx; // ID é o indice
+                ui_mode = MODE_SEL_BENCH;
+                sel_idx = 0;
+            }
+        }
+        else if (ui_mode == MODE_SEL_BENCH) {
+            int count = NUM_BENCHES;
+            if (ch == KEY_UP) sel_idx = (sel_idx - 1 + count) % count;
+            else if (ch == KEY_DOWN) sel_idx = (sel_idx + 1) % count;
+            else if (ch == 27) ui_mode = MODE_NORMAL;
+            else if (ch == 10) {
+                selected_bench_id = sel_idx;
+                
+                // Pede instrução
                 werase(w_cmd);
-                draw_border_title(w_cmd, " DESIGNAR ");
-                mvwprintw(w_cmd, 1, 2, "Instrucao (ex: CUT 2): ");
+                draw_border_title(w_cmd, " INSTRUCAO ");
+                mvwprintw(w_cmd, 1, 2, "M%d -> T%d -> B%d. Digite comando:", selected_mod_id, selected_tedax_id, selected_bench_id);
                 wrefresh(w_cmd);
                 
+                echo(); 
+                nodelay(stdscr, FALSE);
                 char instr[64];
                 wgetnstr(w_cmd, instr, 60);
-
-                char cmd_str[128];
-                snprintf(cmd_str, sizeof(cmd_str), "M %d %s", id, instr);
+                noecho();
+                nodelay(stdscr, TRUE);
                 
+                // Envia comando formatado para o coordinator
+                char cmd_str[128];
+                snprintf(cmd_str, sizeof(cmd_str), "M %d %d %d %s", selected_mod_id, selected_tedax_id, selected_bench_id, instr);
                 coord_enqueue_command(cmd_str);
-                log_event("[UI] Enviado para Coord: M%d", id);
-
-                noecho();
-                nodelay(stdscr, TRUE);
-            } 
-            else {
-                // Modo Jogador
-                module_t *m = mural_pop_by_id(id);
-                if (!m) {
-                    log_event("[UI] M%d nao encontrado ou ja resolvido", id);
-                } else {
-                    werase(w_cmd);
-                    draw_border_title(w_cmd, " RESOLVER AGORA ");
-                    mvwprintw(w_cmd, 1, 2, "Tipo: %d. Solucao: %s", m->type, m->solution);
-                    mvwprintw(w_cmd, 2, 2, "Digite a solucao: ");
-                    wrefresh(w_cmd);
-                    
-                    char ans[64];
-                    wgetnstr(w_cmd, ans, 60);
-                    
-                    if (strcasecmp(ans, m->solution) == 0) {
-                        log_event("[PLAYER] M%d resolvido com sucesso!", m->id);
-                        mural_add_score();
-                        free(m);
-                    } else {
-                        log_event("[PLAYER] Errou! M%d voltou pro mural.", m->id);
-                        mural_requeue(m);
-                    }
-                }
-                noecho();
-                nodelay(stdscr, TRUE);
+                
+                ui_mode = MODE_NORMAL;
             }
         }
 
@@ -348,7 +411,7 @@ static void* ui_thread_fn(void *arg) {
 void ui_start(void) {
     for (int i=0;i<LOG_LINES;i++) { logbuf[i] = NULL; }
     pthread_create(&ui_thread, NULL, ui_thread_fn, NULL);
-    log_event("[SYSTEM] UI iniciado");
+    log_event("[SYSTEM] UI iniciado - Use 'D' para selecionar com setas");
 }
 
 void ui_stop(void) {

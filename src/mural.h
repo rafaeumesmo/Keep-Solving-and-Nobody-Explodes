@@ -36,5 +36,8 @@ void mural_lock_access(void);
 void mural_unlock_access(void);
 void mural_add_score(void);
 int mural_get_score(void);
+void mural_add_money(int amount);
+int mural_get_money(void);
+module_t* mural_get_by_index(int index);
 
 #endif // MURAL_H

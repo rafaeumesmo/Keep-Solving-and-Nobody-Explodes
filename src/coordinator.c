@@ -72,37 +72,52 @@ static void handle_auto_assign_generic() {
 
 // [M] Manual Assign (ID específico + Instrução)
 // Formato do comando: "M <id> <instrução...>"
-static void handle_manual_assign(const char *cmd) {
-    int m_id;
-    char instr[64];
+// Em src/coordinator.c -> handle_manual_assign
 
-    // Faz o parse da string "M 12 CUT 1"
-    if (sscanf(cmd, "M %d %[^\n]", &m_id, instr) < 2) {
+// Modifique para aceitar formato estendido: M <id_mod> <id_tedax> <id_bench> <instrucao>
+static void handle_manual_assign(const char *cmd) {
+    int m_id, t_id, b_id;
+    char instr[64];
+    int parsed_extended = 0;
+
+    // Tenta formato completo (vindo da nova UI com setas)
+    // Ex: "M 5 1 0 CUT 1" (Modulo 5, Tedax 1, Bancada 0, Instrução CUT 1)
+    if (sscanf(cmd, "M %d %d %d %[^\n]", &m_id, &t_id, &b_id, instr) == 4) {
+        parsed_extended = 1;
+    } 
+    // Fallback para formato antigo (M <id> <instrucao>)
+    else if (sscanf(cmd, "M %d %[^\n]", &m_id, instr) == 2) {
+        parsed_extended = 0;
+    } else {
         log_event("[COORD] Erro formato comando: %s", cmd);
         return;
     }
 
-    // Tenta retirar o módulo específico do mural
     module_t *m = mural_pop_by_id(m_id);
     if (!m) {
         log_event("[COORD] Falha: M%d nao encontrado no mural.", m_id);
         return;
     }
-
-    // Grava a instrução dada pelo jogador
+    
     snprintf(m->instruction, sizeof(m->instruction), "%s", instr);
 
-    // Solicita um Tedax (usa lógica auto para achar quem está livre)
-    int tid = tedax_request_auto(m);
-    
-    if (tid < 0) {
-        log_event("[COORD] M%d (ID) sem Tedax livre. Re-enfileirado.", m_id);
-        mural_requeue(m);
+    if (parsed_extended) {
+        // Usa a função manual específica do tedax.c
+        if (!tedax_request_manual(m, t_id, b_id, 0)) {
+            log_event("[COORD] Falha ao atribuir M%d -> T%d B%d (Ocupados?)", m_id, t_id, b_id);
+            mural_requeue(m);
+        } else {
+             // Sucesso tratado pelo log interno do tedax
+        }
     } else {
-        log_event("[COORD] Manual: M%d -> T%d (Instr: %s)", m_id, tid, instr);
+        // Comportamento antigo (Auto-find resources)
+        int tid = tedax_request_auto(m);
+        if (tid < 0) {
+            log_event("[COORD] M%d sem recursos. Re-enfileirado.", m_id);
+            mural_requeue(m);
+        }
     }
 }
-
 static void* coordinator_fn(void *arg) {
     (void)arg;
     char cmd[CMD_MAX];
