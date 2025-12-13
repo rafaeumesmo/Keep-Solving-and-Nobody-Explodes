@@ -106,7 +106,14 @@ static void* tedax_thread_fn(void *arg) {
         module_t *m = self->current;
         self->busy = 1;
         self->start_time = time(NULL);
-        self->remaining = m->time_required;
+        // tentativa aleatória entre metade e (tempo do módulo - 1)
+        int min_attempt = (m->time_required + 1) / 2; // ceil
+        int max_attempt = m->time_required - 1;
+        if (max_attempt < 1) max_attempt = 1;
+        if (min_attempt < 1) min_attempt = 1;
+        if (max_attempt < min_attempt) max_attempt = min_attempt;
+        int attempt_limit = min_attempt + (rand() % (max_attempt - min_attempt + 1));
+        self->remaining = attempt_limit;
         int assigned_bench = self->bench_id; 
 
         pthread_mutex_unlock(&self->lock);
@@ -123,13 +130,21 @@ static void* tedax_thread_fn(void *arg) {
         }
 
         int elapsed = 0;
-        while (pool_running && elapsed < m->time_required) {
+        int attempt_limit_local = self->remaining;
+        while (pool_running && elapsed < attempt_limit_local) {
             sleep(1);
             elapsed++;
             time_t now = time(NULL);
+            // atualiza remaining para a UI
+            pthread_mutex_lock(&self->lock);
+            self->remaining = attempt_limit_local - elapsed;
+            if (self->remaining < 0) self->remaining = 0;
+            pthread_mutex_unlock(&self->lock);
             if (now > (m->created_at + m->timeout_secs)) {
                 log_event("[T%d] 💥 M%d EXPLODIU na mao! (Timeout)", self->id, m->id);
+                pthread_mutex_lock(&self->lock);
                 self->remaining = 0;
+                pthread_mutex_unlock(&self->lock);
                 m->instruction[0] = '\0'; // Garante falha
                 break; 
             }
@@ -264,7 +279,13 @@ int tedax_assign_module(int id, module_t *m) {
     t->current = m;
     t->bench_id = -1; 
     t->start_time = time(NULL);
-    t->remaining = m->time_required;
+    int min_attempt = (m->time_required + 1) / 2;
+    int max_attempt = m->time_required - 1;
+    if (max_attempt < 1) max_attempt = 1;
+    if (min_attempt < 1) min_attempt = 1;
+    if (max_attempt < min_attempt) max_attempt = min_attempt;
+    int attempt_limit = min_attempt + (rand() % (max_attempt - min_attempt + 1));
+    t->remaining = attempt_limit;
     t->busy = 1;
     pthread_cond_signal(&t->cond);
     pthread_mutex_unlock(&t->lock);
@@ -294,7 +315,15 @@ int tedax_request_auto(module_t *m) {
     pool[chosen].current = m;
     pool[chosen].bench_id = bidx;
     pool[chosen].start_time = time(NULL);
-    pool[chosen].remaining = m->time_required;
+    {
+        int min_attempt = (m->time_required + 1) / 2;
+        int max_attempt = m->time_required - 1;
+        if (max_attempt < 1) max_attempt = 1;
+        if (min_attempt < 1) min_attempt = 1;
+        if (max_attempt < min_attempt) max_attempt = min_attempt;
+        int attempt_limit = min_attempt + (rand() % (max_attempt - min_attempt + 1));
+        pool[chosen].remaining = attempt_limit;
+    }
     pool[chosen].busy = 1;
     pthread_cond_signal(&pool[chosen].cond);
     pthread_mutex_unlock(&pool[chosen].lock);
@@ -330,7 +359,15 @@ int tedax_request_manual(module_t *m, int tedax_id, int bench_id, int presses) {
     pool[tedax_id].current = m;
     pool[tedax_id].bench_id = bench_id;
     pool[tedax_id].start_time = time(NULL);
-    pool[tedax_id].remaining = m->time_required;
+    {
+        int min_attempt = (m->time_required + 1) / 2;
+        int max_attempt = m->time_required - 1;
+        if (max_attempt < 1) max_attempt = 1;
+        if (min_attempt < 1) min_attempt = 1;
+        if (max_attempt < min_attempt) max_attempt = min_attempt;
+        int attempt_limit = min_attempt + (rand() % (max_attempt - min_attempt + 1));
+        pool[tedax_id].remaining = attempt_limit;
+    }
     pool[tedax_id].busy = 1;
     pthread_cond_signal(&pool[tedax_id].cond);
     pthread_mutex_unlock(&pool[tedax_id].lock);

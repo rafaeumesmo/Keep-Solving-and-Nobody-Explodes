@@ -218,10 +218,7 @@ static void draw_tedax_panel() {
         if (t->current) {
             wattron(w_tedax, COLOR_PAIR(CP_ACCENT));
             {
-                time_t now = time(NULL);
-                int elapsed = (int)(now - t->start_time);
-                int total = t->current->time_required;
-                int rem = total - elapsed;
+                int rem = t->remaining;
                 if (rem < 0) rem = 0;
                 char tbuf[16]; seconds_to_mmss(rem, tbuf, sizeof(tbuf));
                 mvwprintw(w_tedax, row++, 1, "%sT%d: [O] %s | %s", is_sel?"->":"  ", t->id,
