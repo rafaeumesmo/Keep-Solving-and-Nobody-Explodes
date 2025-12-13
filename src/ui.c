@@ -13,6 +13,7 @@
 #include <strings.h> 
 #include <time.h>
 #include <unistd.h>
+#include <ctype.h>
 
 // Cores e Pares
 enum { CP_DEFAULT=1, CP_TITLE, CP_HEADER, CP_OK, CP_WARN, CP_ERR, CP_ACCENT, CP_SELECT };
@@ -21,12 +22,23 @@ static pthread_t ui_thread;
 static volatile int ui_running = 0;
 
 // Estados da Interface In-Game
-enum { MODE_NORMAL=0, MODE_SEL_MOD, MODE_SEL_TEDAX, MODE_SEL_BENCH };
+enum { 
+    MODE_NORMAL=0, 
+    MODE_SEL_MOD, 
+    MODE_SEL_TEDAX, 
+    MODE_SEL_BENCH,
+    MODE_INPUT_CMD 
+};
+
 static int ui_mode = MODE_NORMAL;
 static int sel_idx = 0;
 static int selected_mod_id = -1;
 static int selected_tedax_id = -1;
 static int selected_bench_id = -1;
+
+// Buffer para entrada de texto
+static char input_buf[64];
+static int input_pos = 0;
 
 // Windows
 static WINDOW *w_header, *w_mural, *w_tedax, *w_bench, *w_log, *w_cmd;
@@ -36,7 +48,7 @@ static char *logbuf[LOG_LINES];
 static int log_pos = -1;
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 
-// --- NOVA FUNÇÃO ---
+// --- FUNÇÕES DE ESTADO ---
 int is_ui_active(void) {
     return ui_running;
 }
@@ -83,7 +95,7 @@ int show_main_menu_ncurses(void) {
     while(1) {
         erase();
         int h, w; getmaxyx(stdscr,h,w);
-        attron(A_BOLD); mvprintw(3, (w-8)/2, "KEEP SOLVING!"); attroff(A_BOLD);
+        attron(A_BOLD); mvprintw(3, (w-13)/2, "KEEP SOLVING!"); attroff(A_BOLD);
         for(int i=0;i<n;i++) {
             if(i==sel) attron(A_REVERSE|A_BOLD);
             mvprintw(h/2-2 + i*2, w/2-10, " %s ", options[i]);
@@ -179,7 +191,10 @@ static void draw_mural_panel() {
 
         int barlen=10;
         int filled = (cur->time_required>0)?(barlen*(cur->time_required-rem)/cur->time_required):0;
-        if(filled<0) filled=0; if(filled>barlen) filled=barlen;
+        
+        if(filled < 0) { filled = 0; } 
+        if(filled > barlen) { filled = barlen; }
+        
         char bar[32]; int p=0; for(int k=0;k<barlen;k++) bar[p++]=(k<filled?'#':'.'); bar[p]=0;
         
         mvwprintw(w_mural, row, 4, "ID:%-3d | %-7s | %s | %2ds",
@@ -263,10 +278,17 @@ static void draw_log_panel() {
 
 static void draw_cmd_panel() {
     draw_border_title(w_cmd, " COMANDOS ");
-    if (ui_mode==MODE_NORMAL) mvwprintw(w_cmd, 1, 2, "[A] Auto | [D] Selecionar | [Q] Menu Principal");
-    else if (ui_mode==MODE_SEL_MOD) mvwprintw(w_cmd, 1, 2, "SELECIONE MODULO | [Q] Cancelar");
-    else if (ui_mode==MODE_SEL_TEDAX) mvwprintw(w_cmd, 1, 2, "SELECIONE TEDAX");
-    else if (ui_mode==MODE_SEL_BENCH) mvwprintw(w_cmd, 1, 2, "SELECIONE BANCADA");
+    if (ui_mode==MODE_NORMAL) {
+        mvwprintw(w_cmd, 1, 2, "[A] Auto | [D] Selecionar | [Q] Menu Principal");
+    } else if (ui_mode==MODE_SEL_MOD) {
+        mvwprintw(w_cmd, 1, 2, "SELECIONE MODULO | [Q] Cancelar");
+    } else if (ui_mode==MODE_SEL_TEDAX) {
+        mvwprintw(w_cmd, 1, 2, "SELECIONE TEDAX");
+    } else if (ui_mode==MODE_SEL_BENCH) {
+        mvwprintw(w_cmd, 1, 2, "SELECIONE BANCADA");
+    } else if (ui_mode==MODE_INPUT_CMD) {
+        mvwprintw(w_cmd, 1, 2, "Instrucao: %s_", input_buf);
+    }
     wrefresh(w_cmd);
 }
 
@@ -290,17 +312,46 @@ static void* ui_thread_fn(void *arg) {
     w_bench  = newwin(H/2 - 3, W/2, H/2, W/2);
     w_log    = newwin(4, W, H - 7, 0);
     w_cmd    = newwin(3, W, H - 3, 0);
+    
+    // IMPORTANTE: Permitir teclas especiais na janela de comandos
+    keypad(w_cmd, TRUE);
 
     ui_running = 1;
     while (ui_running) {
+        // Redesenha toda a UI a cada ciclo (100ms)
         draw_header(W); draw_mural_panel(); draw_tedax_panel();
         draw_bench_panel(); draw_log_panel(); draw_cmd_panel();
+        
         int ch = getch();
         
-        if (ui_mode == MODE_NORMAL) {
+        // MODO ESCRITA: Trata input caractere a caractere (SEM WGETNSTR)
+        if (ui_mode == MODE_INPUT_CMD) {
+            if (ch != ERR) {
+                if (ch == '\n' || ch == KEY_ENTER || ch == 10 || ch == 13) {
+                    char cmd[128]; 
+                    snprintf(cmd, 128, "M %d %d %d %s", selected_mod_id, selected_tedax_id, selected_bench_id, input_buf);
+                    coord_enqueue_command(cmd); 
+                    ui_mode = MODE_NORMAL;
+                    input_pos = 0; input_buf[0] = '\0';
+                }
+                else if (ch == KEY_BACKSPACE || ch == 127 || ch == '\b') {
+                    if (input_pos > 0) {
+                        input_buf[--input_pos] = '\0';
+                    }
+                }
+                else if (ch == 27) { // ESC: Cancela
+                    ui_mode = MODE_NORMAL;
+                    input_pos = 0; input_buf[0] = '\0';
+                }
+                else if (isprint(ch) && input_pos < 60) {
+                    input_buf[input_pos++] = (char)ch;
+                    input_buf[input_pos] = '\0';
+                }
+            }
+        }
+        else if (ui_mode == MODE_NORMAL) {
             if (ch == 'q' || ch == 'Q') { 
-                ui_running = 0; // SINALIZA SAIDA PARA O MENU
-                break; 
+                ui_running = 0; break; 
             }
             else if (ch == 'a' || ch == 'A') { coord_enqueue_command("A"); log_event("[UI] Auto-assign"); }
             else if (ch == 'd' || ch == 'D') { 
@@ -312,8 +363,11 @@ static void* ui_thread_fn(void *arg) {
             if (ch==KEY_UP) sel_idx=(sel_idx-1+cnt)%cnt;
             else if (ch==KEY_DOWN) sel_idx=(sel_idx+1)%cnt;
             else if (ch=='q'||ch=='Q'||ch==27) ui_mode=MODE_NORMAL;
-            else if (ch==10) {
-                 mural_lock_access(); module_t *m=mural_get_by_index(sel_idx); if(m) selected_mod_id=m->id; mural_unlock_access();
+            else if (ch==10 || ch==KEY_ENTER || ch==13) {
+                 // --- CORREÇÃO DO DEADLOCK AQUI ---
+                 // Removemos mural_lock_access() daqui porque mural_get_by_index já bloqueia internamente.
+                 module_t *m = mural_get_by_index(sel_idx); 
+                 if(m) selected_mod_id = m->id;
                  ui_mode=MODE_SEL_TEDAX; sel_idx=0;
             }
         }
@@ -321,31 +375,28 @@ static void* ui_thread_fn(void *arg) {
              int cnt=tedax_count();
              if (ch==KEY_UP) sel_idx=(sel_idx-1+cnt)%cnt;
              else if (ch==KEY_DOWN) sel_idx=(sel_idx+1)%cnt;
-             else if (ch==10) { selected_tedax_id=sel_idx; ui_mode=MODE_SEL_BENCH; sel_idx=0; }
+             else if (ch==10 || ch==KEY_ENTER || ch==13) { selected_tedax_id=sel_idx; ui_mode=MODE_SEL_BENCH; sel_idx=0; }
         }
         else if (ui_mode == MODE_SEL_BENCH) {
              int cnt=NUM_BENCHES;
              if (ch==KEY_UP) sel_idx=(sel_idx-1+cnt)%cnt;
              else if (ch==KEY_DOWN) sel_idx=(sel_idx+1)%cnt;
-             else if (ch==10) {
+             else if (ch==10 || ch==KEY_ENTER || ch==13) {
                  selected_bench_id=sel_idx;
-                 echo(); nodelay(stdscr, FALSE);
-                 werase(w_cmd); box(w_cmd,0,0); mvwprintw(w_cmd,1,2,"Instrucao: "); wrefresh(w_cmd);
-                 char instr[64]; wgetnstr(w_cmd, instr, 60);
-                 noecho(); nodelay(stdscr, TRUE);
-                 char cmd[128]; snprintf(cmd, 128, "M %d %d %d %s", selected_mod_id, selected_tedax_id, selected_bench_id, instr);
-                 coord_enqueue_command(cmd); ui_mode=MODE_NORMAL;
+                 ui_mode = MODE_INPUT_CMD;
+                 input_pos = 0; input_buf[0] = '\0';
              }
         }
-        struct timespec ts = {0, 100000000}; nanosleep(&ts, NULL);
+        
+        struct timespec ts = {0, 100000000}; 
+        nanosleep(&ts, NULL);
     }
+    
     delwin(w_header); delwin(w_mural); delwin(w_tedax); delwin(w_bench); delwin(w_log); delwin(w_cmd);
     endwin(); return NULL;
 }
 
 void ui_start(void) {
-    // Reset log buffer apenas se estiverem nulos (nao limpar leaks aqui, limparemos no stop)
-    // Na verdade, para reiniciar limpo, vamos limpar agora
     pthread_mutex_lock(&log_lock);
     for(int i=0; i<LOG_LINES; i++) { 
         if(logbuf[i]) { free(logbuf[i]); logbuf[i]=NULL; } 
@@ -360,7 +411,6 @@ void ui_start(void) {
 void ui_stop(void) {
     ui_running = 0;
     pthread_join(ui_thread, NULL);
-    // Limpeza final de logs
     pthread_mutex_lock(&log_lock);
     for(int i=0; i<LOG_LINES; i++) { 
         if(logbuf[i]) { free(logbuf[i]); logbuf[i]=NULL; } 
