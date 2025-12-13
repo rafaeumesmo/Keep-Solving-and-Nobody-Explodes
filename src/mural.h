@@ -34,6 +34,10 @@ module_t* mural_find_by_tedax_type(int tedax_id, char type);
 void mural_lock_access(void);
 void mural_unlock_access(void);
 
+// --- NOVO: Gestão de Resolvidos ---
+void mural_add_to_resolved(module_t *m);
+module_t* mural_peek_resolved(void);
+
 // Score e Dinheiro
 void mural_add_score(void);
 int mural_get_score(void);
@@ -43,7 +47,7 @@ int mural_get_money(void);
 // Interface
 module_t* mural_get_by_index(int index);
 
-// NOVO: Timer Global
+// Timer Global
 void mural_setup_timer(int duration_seconds);
 int mural_get_remaining_seconds(void);
 

@@ -9,14 +9,16 @@
 #include "ui.h"
 #include "config.h"
 
+// Duas listas: Ativos e Resolvidos
 static module_t *mural_head = NULL;
 static module_t *mural_tail = NULL;
+
+static module_t *resolved_head = NULL; // Lista de resolvidos
 
 pthread_mutex_t mural_lock = PTHREAD_MUTEX_INITIALIZER;
 static int mural_size = 0;
 static int global_score = 0;
 static int global_money = MOEDAS_INICIAL;
-// NOVO: Armazena o timestamp exato de quando o jogo deve acabar
 static time_t game_deadline = 0; 
 
 // =====================================================
@@ -54,10 +56,11 @@ module_t* create_module(int id) {
 }
 
 // =====================================================
-//  Gerenciamento da Fila
+//  Gerenciamento da Fila (ATIVOS)
 // =====================================================
 void mural_push(module_t *m) {
     pthread_mutex_lock(&mural_lock);
+    m->next = NULL; // Garante que não aponta para lixo
     if (!mural_head) { mural_head = mural_tail = m; } 
     else { mural_tail->next = m; mural_tail = m; }
     mural_size++;
@@ -140,27 +143,53 @@ module_t* mural_get_by_index(int index) {
 }
 
 // =====================================================
+//  Gestão de Resolvidos (NOVO)
+// =====================================================
+void mural_add_to_resolved(module_t *m) {
+    if (!m) return;
+    pthread_mutex_lock(&mural_lock);
+    // Insere no início da lista (Pilha) para ver os mais recentes primeiro
+    m->next = resolved_head;
+    resolved_head = m;
+    pthread_mutex_unlock(&mural_lock);
+}
+
+module_t* mural_peek_resolved(void) {
+    return resolved_head;
+}
+
+// =====================================================
 //  Init / Destroy / Utils
 // =====================================================
 void mural_init(void) {
     pthread_mutex_lock(&mural_lock);
     mural_head = mural_tail = NULL;
+    resolved_head = NULL;
     mural_size = 0;
     global_score = 0;
     global_money = MOEDAS_INICIAL;
-    game_deadline = 0; // Reset timer
+    game_deadline = 0; 
     pthread_mutex_unlock(&mural_lock);
 }
 
 void mural_destroy(void) {
     pthread_mutex_lock(&mural_lock);
+    // Limpa ativos
     module_t *cur = mural_head;
     while (cur) {
         module_t *n = cur->next;
         free(cur);
         cur = n;
     }
+    // Limpa resolvidos
+    cur = resolved_head;
+    while (cur) {
+        module_t *n = cur->next;
+        free(cur);
+        cur = n;
+    }
     mural_head = mural_tail = NULL;
+    resolved_head = NULL;
     mural_size = 0;
     pthread_mutex_unlock(&mural_lock);
 }
@@ -199,14 +228,12 @@ int mural_get_money(void) {
     return m;
 }
 
-// Define o tempo de fim (agora + duração)
 void mural_setup_timer(int duration_seconds) {
     pthread_mutex_lock(&mural_lock);
     game_deadline = time(NULL) + duration_seconds;
     pthread_mutex_unlock(&mural_lock);
 }
 
-// Retorna segundos restantes para o fim do jogo
 int mural_get_remaining_seconds(void) {
     pthread_mutex_lock(&mural_lock);
     if (game_deadline == 0) {

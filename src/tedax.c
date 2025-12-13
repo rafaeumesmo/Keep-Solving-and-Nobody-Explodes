@@ -122,11 +122,9 @@ static void* tedax_thread_fn(void *arg) {
             log_event("[T%d] bancada %d confirmada (pre-assign) M%d", self->id, assigned_bench, m->id);
         }
 
-        // Simula o tempo de trabalho
         while (pool_running && self->remaining > 0) {
             sleep(1);
 
-            // Timeout em Tempo Real
             time_t now = time(NULL);
             if (now > (m->created_at + m->timeout_secs)) {
                 log_event("[T%d] 💥 M%d EXPLODIU na mao! (Timeout)", self->id, m->id);
@@ -141,26 +139,18 @@ static void* tedax_thread_fn(void *arg) {
             pthread_mutex_unlock(&self->lock);
         }
 
-        // --- LÓGICA DE SUCESSO MODIFICADA ---
         int success = 0;
         
-        // Caso 1: Input Manual (Instrução existe)
+        // Lógica de Sucesso (Igual à anterior: Manual vs Auto)
         if (m->instruction[0] != '\0') {
             if (ci_equal(m->instruction, m->solution)) success = 1;
             else success = 0;
         } 
-        // Caso 2: Auto-Assign (Instrução vazia) -> Chance Aleatória
         else {
-            // Chance de 60% de acertar no modo automático
             int chance = rand() % 100;
-            if (chance < 60) {
-                success = 1;
-            } else {
-                success = 0;
-                log_event("[T%d] IA falhou no desarmamento automatico.", self->id);
-            }
+            if (chance < 60) success = 1;
+            else { success = 0; log_event("[T%d] IA falhou no desarmamento automatico.", self->id); }
         }
-        // ------------------------------------
 
         bench_release_index(assigned_bench);
 
@@ -168,10 +158,12 @@ static void* tedax_thread_fn(void *arg) {
             log_event("[T%d] ✔ M%d DESARMADO (+%d Gold)", self->id, m->id, MOEDAS_POR_MODULO);
             mural_add_score();
             mural_add_money(MOEDAS_POR_MODULO);
-            free(m);
+            
+            // --- ALTERAÇÃO AQUI: Move para resolvidos em vez de free() ---
+            mural_add_to_resolved(m);
+            // -------------------------------------------------------------
         } else {
             log_event("[T%d] ✖ M%d FALHOU — re-enfileirado", self->id, m->id);
-            // Reseta instrução para não falhar imediatamente na próxima
             m->instruction[0] = '\0'; 
             mural_requeue(m);
         }

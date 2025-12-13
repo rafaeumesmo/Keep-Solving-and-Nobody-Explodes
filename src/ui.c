@@ -36,12 +36,11 @@ static int selected_mod_id = -1;
 static int selected_tedax_id = -1;
 static int selected_bench_id = -1;
 
-// Buffer para entrada de texto
 static char input_buf[64];
 static int input_pos = 0;
 
-// Windows
-static WINDOW *w_header, *w_mural, *w_tedax, *w_bench, *w_log, *w_cmd;
+// Windows (Adicionada w_completed)
+static WINDOW *w_header, *w_mural, *w_completed, *w_tedax, *w_bench, *w_log, *w_cmd;
 
 // Log buffer
 static char *logbuf[LOG_LINES];
@@ -49,30 +48,19 @@ static int log_pos = -1;
 static pthread_mutex_t log_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // --- FUNÇÕES DE ESTADO ---
-int is_ui_active(void) {
-    return ui_running;
-}
+int is_ui_active(void) { return ui_running; }
 
 // --- MENUS ---
 void show_start_screen(void) {
-    initscr();
-    start_color();
-    noecho();
-    curs_set(0);
-    keypad(stdscr, TRUE);
+    initscr(); start_color(); noecho(); curs_set(0); keypad(stdscr, TRUE);
     init_pair(1, COLOR_WHITE, COLOR_BLACK);
     init_pair(2, COLOR_CYAN, COLOR_BLACK);
-
     const char *title = "KEEP SOLVING!!";
     const char *press = "Pressione qualquer tecla";
     const char *footer = "© 2025 IDP - Keep Solving and Nobody Explodes";
-    int blink = 0;
-    nodelay(stdscr, TRUE);
-
+    int blink = 0; nodelay(stdscr, TRUE);
     while (1) {
-        clear();
-        int h, w;
-        getmaxyx(stdscr, h, w);
+        clear(); int h, w; getmaxyx(stdscr, h, w);
         attron(A_BOLD | COLOR_PAIR(2));
         mvprintw(h/2-2, (w-(int)strlen(title))/2, "%s", title);
         attroff(A_BOLD | COLOR_PAIR(2));
@@ -80,12 +68,10 @@ void show_start_screen(void) {
         mvprintw(h-2, (w-(int)strlen(footer))/2, "%s", footer);
         refresh();
         if (getch() != ERR) break;
-        struct timespec ts = {0, 50000000}; 
-        nanosleep(&ts, NULL);
+        struct timespec ts = {0, 50000000}; nanosleep(&ts, NULL);
         blink = (blink + 1) % 20;
     }
-    nodelay(stdscr, FALSE);
-    endwin();
+    nodelay(stdscr, FALSE); endwin();
 }
 
 int show_main_menu_ncurses(void) {
@@ -93,8 +79,7 @@ int show_main_menu_ncurses(void) {
     const char *options[] = {"Modo Classico", "Opcoes (N/A)", "Sair"};
     int n=3, sel=0;
     while(1) {
-        erase();
-        int h, w; getmaxyx(stdscr,h,w);
+        erase(); int h, w; getmaxyx(stdscr,h,w);
         attron(A_BOLD); mvprintw(3, (w-13)/2, "KEEP SOLVING!"); attroff(A_BOLD);
         for(int i=0;i<n;i++) {
             if(i==sel) attron(A_REVERSE|A_BOLD);
@@ -115,11 +100,8 @@ int show_difficulty_menu_ncurses(void) {
     const char *options[] = {"[1] Facil", "[2] Medio", "[3] Dificil", "[4] Insano"};
     int n=4, sel=1;
     while(1) {
-        erase();
-        int h, w; getmaxyx(stdscr,h,w);
-        attron(A_BOLD);
-        mvprintw(3, (w-23)/2, "SELECIONE A DIFICULDADE");
-        attroff(A_BOLD);
+        erase(); int h, w; getmaxyx(stdscr,h,w);
+        attron(A_BOLD); mvprintw(3, (w-23)/2, "SELECIONE A DIFICULDADE"); attroff(A_BOLD);
         for(int i=0;i<n;i++) {
             if(i==sel) attron(A_REVERSE|A_BOLD);
             mvprintw(h/2-2 + i*2, w/2-10, " %s ", options[i]);
@@ -171,7 +153,7 @@ static void draw_header(int cols) {
 }
 
 static void draw_mural_panel() {
-    draw_border_title(w_mural, " MODULOS ATIVOS ");
+    draw_border_title(w_mural, " ATIVOS ");
     int row = 1;
     mural_lock_access();
     module_t *cur = mural_peek_list();
@@ -189,21 +171,40 @@ static void draw_mural_panel() {
         else if (rem<=20) wattron(w_mural, COLOR_PAIR(CP_WARN));
         else wattron(w_mural, COLOR_PAIR(CP_OK));
 
-        int barlen=10;
+        int barlen=8; // Menor barra pois a tela é menor
         int filled = (cur->time_required>0)?(barlen*(cur->time_required-rem)/cur->time_required):0;
-        
         if(filled < 0) { filled = 0; } 
         if(filled > barlen) { filled = barlen; }
-        
         char bar[32]; int p=0; for(int k=0;k<barlen;k++) bar[p++]=(k<filled?'#':'.'); bar[p]=0;
         
-        mvwprintw(w_mural, row, 4, "ID:%-3d | %-7s | %s | %2ds",
-                  cur->id, (cur->type==MOD_FIOS?"FIOS":(cur->type==MOD_BOTAO?"BOTAO":"SENHAS")), bar, rem);
+        mvwprintw(w_mural, row, 4, "M%-2d|%-6s|%s|%2ds",
+                  cur->id, (cur->type==MOD_FIOS?"FIOS":(cur->type==MOD_BOTAO?"BOTAO":"SENHA")), bar, rem);
         wattroff(w_mural, A_BLINK|COLOR_PAIR(CP_ERR)|COLOR_PAIR(CP_WARN)|COLOR_PAIR(CP_OK));
         if (ui_mode == MODE_SEL_MOD && idx == sel_idx) wattroff(w_mural, A_REVERSE | A_BOLD);
         cur=cur->next; row++; idx++;
     }
     mural_unlock_access(); wrefresh(w_mural);
+}
+
+// --- NOVO: PAINEL DE RESOLVIDOS ---
+static void draw_completed_panel() {
+    draw_border_title(w_completed, " RESOLVIDOS ");
+    int row = 1;
+    mural_lock_access();
+    module_t *cur = mural_peek_resolved();
+    int maxr = getmaxy(w_completed)-2;
+    
+    while (cur && row <= maxr) {
+        wattron(w_completed, COLOR_PAIR(CP_OK));
+        mvwprintw(w_completed, row, 2, "M%-2d [OK] %s", 
+                  cur->id, 
+                  (cur->type==MOD_FIOS?"FIOS":(cur->type==MOD_BOTAO?"BOTAO":"SENHA")));
+        wattroff(w_completed, COLOR_PAIR(CP_OK));
+        cur = cur->next;
+        row++;
+    }
+    mural_unlock_access(); 
+    wrefresh(w_completed);
 }
 
 static void draw_tedax_panel() {
@@ -217,7 +218,7 @@ static void draw_tedax_panel() {
         if (t->current) {
             wattron(w_tedax, COLOR_PAIR(CP_ACCENT));
             mvwprintw(w_tedax, row++, 1, "%sT%d: [O] %s (%2ds)", is_sel?"->":"  ", t->id, 
-                      (t->current->type==MOD_FIOS?"FIOS":(t->current->type==MOD_BOTAO?"BOTAO":"SENHAS")), t->remaining);
+                      (t->current->type==MOD_FIOS?"FIOS":(t->current->type==MOD_BOTAO?"BOTAO":"SENHA")), t->remaining);
             wattroff(w_tedax, COLOR_PAIR(CP_ACCENT));
         } else {
             wattron(w_tedax, COLOR_PAIR(CP_OK));
@@ -306,25 +307,25 @@ static void* ui_thread_fn(void *arg) {
     noecho(); cbreak(); curs_set(0); keypad(stdscr, TRUE); nodelay(stdscr, TRUE);
 
     int H = LINES, W = COLS;
+    // Layout novo: Metade esquerda p/ mural, metade direita p/ resolvidos
     w_header = newwin(1, W, 0, 0);
-    w_mural  = newwin(H/2 - 1, W, 1, 0);
+    w_mural  = newwin(H/2 - 1, W/2, 1, 0);
+    w_completed = newwin(H/2 - 1, W - W/2, 1, W/2); // Nova janela
     w_tedax  = newwin(H/2 - 3, W/2, H/2, 0);
     w_bench  = newwin(H/2 - 3, W/2, H/2, W/2);
     w_log    = newwin(4, W, H - 7, 0);
     w_cmd    = newwin(3, W, H - 3, 0);
     
-    // IMPORTANTE: Permitir teclas especiais na janela de comandos
     keypad(w_cmd, TRUE);
 
     ui_running = 1;
     while (ui_running) {
-        // Redesenha toda a UI a cada ciclo (100ms)
-        draw_header(W); draw_mural_panel(); draw_tedax_panel();
-        draw_bench_panel(); draw_log_panel(); draw_cmd_panel();
+        // Agora desenhamos também o painel de resolvidos
+        draw_header(W); draw_mural_panel(); draw_completed_panel();
+        draw_tedax_panel(); draw_bench_panel(); draw_log_panel(); draw_cmd_panel();
         
         int ch = getch();
         
-        // MODO ESCRITA: Trata input caractere a caractere (SEM WGETNSTR)
         if (ui_mode == MODE_INPUT_CMD) {
             if (ch != ERR) {
                 if (ch == '\n' || ch == KEY_ENTER || ch == 10 || ch == 13) {
@@ -339,7 +340,7 @@ static void* ui_thread_fn(void *arg) {
                         input_buf[--input_pos] = '\0';
                     }
                 }
-                else if (ch == 27) { // ESC: Cancela
+                else if (ch == 27) { 
                     ui_mode = MODE_NORMAL;
                     input_pos = 0; input_buf[0] = '\0';
                 }
@@ -350,9 +351,7 @@ static void* ui_thread_fn(void *arg) {
             }
         }
         else if (ui_mode == MODE_NORMAL) {
-            if (ch == 'q' || ch == 'Q') { 
-                ui_running = 0; break; 
-            }
+            if (ch == 'q' || ch == 'Q') { ui_running = 0; break; }
             else if (ch == 'a' || ch == 'A') { coord_enqueue_command("A"); log_event("[UI] Auto-assign"); }
             else if (ch == 'd' || ch == 'D') { 
                 if (mural_count()>0) { ui_mode=MODE_SEL_MOD; sel_idx=0; } else log_event("[UI] Mural vazio!");
@@ -364,8 +363,6 @@ static void* ui_thread_fn(void *arg) {
             else if (ch==KEY_DOWN) sel_idx=(sel_idx+1)%cnt;
             else if (ch=='q'||ch=='Q'||ch==27) ui_mode=MODE_NORMAL;
             else if (ch==10 || ch==KEY_ENTER || ch==13) {
-                 // --- CORREÇÃO DO DEADLOCK AQUI ---
-                 // Removemos mural_lock_access() daqui porque mural_get_by_index já bloqueia internamente.
                  module_t *m = mural_get_by_index(sel_idx); 
                  if(m) selected_mod_id = m->id;
                  ui_mode=MODE_SEL_TEDAX; sel_idx=0;
@@ -392,7 +389,8 @@ static void* ui_thread_fn(void *arg) {
         nanosleep(&ts, NULL);
     }
     
-    delwin(w_header); delwin(w_mural); delwin(w_tedax); delwin(w_bench); delwin(w_log); delwin(w_cmd);
+    delwin(w_header); delwin(w_mural); delwin(w_completed); 
+    delwin(w_tedax); delwin(w_bench); delwin(w_log); delwin(w_cmd);
     endwin(); return NULL;
 }
 
