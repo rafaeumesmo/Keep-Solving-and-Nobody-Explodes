@@ -5,7 +5,7 @@
 #define NUM_TEDAX 3
 #define NUM_BENCHES 2
 
-#define MODULE_GEN_INTERVAL_MS 500   // Spawn rápido
+#define MODULE_GEN_INTERVAL_MS 5000   // Spawn mais lento (ms)
 #define GAME_DURATION_SEC 180        // Duração total do jogo (segundos)
 #define MODULE_TIMEOUT_SEC 30        // timeout para módulos no mural
 

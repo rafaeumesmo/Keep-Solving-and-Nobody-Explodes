@@ -21,7 +21,7 @@ typedef struct tedax {
 } tedax_t;
 
 // lifecycle
-void tedax_pool_init(int n, sem_t *benches_sem);
+void tedax_pool_init(int n, int benches_count, sem_t *benches_sem);
 void tedax_pool_shutdown(void);
 void tedax_pool_destroy(void);
 
@@ -32,5 +32,6 @@ int tedax_request_manual(module_t *m, int tedax_id, int bench_id, int presses); 
 
 tedax_t* tedax_get(int id);
 int tedax_count(void);
+int tedax_bench_count(void);
 
 #endif // TEDAX_H

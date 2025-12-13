@@ -118,12 +118,18 @@ int main(void) {
         apply_difficulty_preset(diff_choice);
         mural_init();
         mural_setup_timer(runtime_game_duration_sec);
+
+        // Garantir que o numero de bancadas e tedax nao seja igual
+        if (runtime_num_benches == runtime_num_tedax) {
+            log_event("[SYSTEM] Ajustando numero de bancadas para evitar igualdade com TEDAX (%d)", runtime_num_tedax);
+            runtime_num_benches = runtime_num_benches + 1;
+        }
         if (sem_init(&benches_sem, 0, (unsigned int)runtime_num_benches) != 0) return 1;
 
         running = 1; // Reset da flag global
         ui_start();
         if (coord_start() != 0) { ui_stop(); sem_destroy(&benches_sem); return 1; }
-        tedax_pool_init(runtime_num_tedax, &benches_sem);
+        tedax_pool_init(runtime_num_tedax, runtime_num_benches, &benches_sem);
         pthread_create(&gen_thread, NULL, generator_fn, NULL);
         pthread_create(&watcher_thread, NULL, watcher_fn, NULL);
 

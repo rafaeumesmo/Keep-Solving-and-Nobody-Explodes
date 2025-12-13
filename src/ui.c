@@ -172,13 +172,13 @@ static void draw_mural_panel() {
         else wattron(w_mural, COLOR_PAIR(CP_OK));
 
         int barlen=8; // Menor barra pois a tela é menor
-        int filled = (cur->time_required>0)?(barlen*(cur->time_required-rem)/cur->time_required):0;
+        int filled = 0; // Módulos mostram tempo fixo (sem contagem regressiva)
         if(filled < 0) { filled = 0; } 
         if(filled > barlen) { filled = barlen; }
         char bar[32]; int p=0; for(int k=0;k<barlen;k++) bar[p++]=(k<filled?'#':'.'); bar[p]=0;
         
         mvwprintw(w_mural, row, 4, "M%-2d|%-6s|%s|%2ds",
-                  cur->id, (cur->type==MOD_FIOS?"FIOS":(cur->type==MOD_BOTAO?"BOTAO":"SENHA")), bar, rem);
+              cur->id, (cur->type==MOD_FIOS?"FIOS":(cur->type==MOD_BOTAO?"BOTAO":"SENHA")), bar, cur->time_required);
         wattroff(w_mural, A_BLINK|COLOR_PAIR(CP_ERR)|COLOR_PAIR(CP_WARN)|COLOR_PAIR(CP_OK));
         if (ui_mode == MODE_SEL_MOD && idx == sel_idx) wattroff(w_mural, A_REVERSE | A_BOLD);
         cur=cur->next; row++; idx++;
@@ -217,8 +217,16 @@ static void draw_tedax_panel() {
         pthread_mutex_lock(&t->lock);
         if (t->current) {
             wattron(w_tedax, COLOR_PAIR(CP_ACCENT));
-            mvwprintw(w_tedax, row++, 1, "%sT%d: [O] %s (%2ds)", is_sel?"->":"  ", t->id, 
-                      (t->current->type==MOD_FIOS?"FIOS":(t->current->type==MOD_BOTAO?"BOTAO":"SENHA")), t->remaining);
+            {
+                time_t now = time(NULL);
+                int elapsed = (int)(now - t->start_time);
+                int total = t->current->time_required;
+                int rem = total - elapsed;
+                if (rem < 0) rem = 0;
+                char tbuf[16]; seconds_to_mmss(rem, tbuf, sizeof(tbuf));
+                mvwprintw(w_tedax, row++, 1, "%sT%d: [O] %s | %s", is_sel?"->":"  ", t->id,
+                          (t->current->type==MOD_FIOS?"FIOS":(t->current->type==MOD_BOTAO?"BOTAO":"SENHA")), tbuf);
+            }
             wattroff(w_tedax, COLOR_PAIR(CP_ACCENT));
         } else {
             wattron(w_tedax, COLOR_PAIR(CP_OK));
@@ -234,7 +242,8 @@ static void draw_tedax_panel() {
 static void draw_bench_panel() {
     draw_border_title(w_bench, " BANCADAS ");
     int n_tedax = tedax_count();
-    for (int i=0; i<NUM_BENCHES; i++) {
+    int nb = tedax_bench_count();
+    for (int i=0; i<nb; i++) {
         int is_busy = 0;
         for(int t=0; t<n_tedax; t++) {
             tedax_t *td = tedax_get(t);

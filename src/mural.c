@@ -29,8 +29,14 @@ module_t* create_module(int id) {
     if (!m) return NULL;
 
     m->id = id;
-    m->type = rand() % 3;             
-    m->time_required = 5 + rand() % 6;
+    m->type = rand() % 3;
+    // Time required varies by module type (in seconds)
+    switch (m->type) {
+        case MOD_FIOS:  m->time_required = 8;  break; // fios: rapido
+        case MOD_BOTAO: m->time_required = 12; break; // botao: medio
+        case MOD_SENHAS: m->time_required = 18; break; // senhas: mais longo
+        default: m->time_required = 10; break;
+    }
     m->created_at = time(NULL);
     m->timeout_secs = 20 + rand() % 10;
     m->instruction[0] = '\0';

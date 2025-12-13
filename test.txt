@@ -1,0 +1,11 @@
+pequod@ahab:~/Desktop/Keep-Solving-and-Nobody-Explodes$ make
+gcc -Wall -Wextra -std=c11 -g -c src/main.c -o src/main.o
+gcc -Wall -Wextra -std=c11 -g -c src/mural.c -o src/mural.o
+gcc -Wall -Wextra -std=c11 -g -c src/tedax.c -o src/tedax.o
+gcc -Wall -Wextra -std=c11 -g -c src/ui.c -o src/ui.o
+src/ui.c: In function ‘draw_header’:
+src/ui.c:207:29: warning: unused parameter ‘cols’ [-Wunused-parameter]
+  207 | static void draw_header(int cols) {
+      |                         ~~~~^~~~
+gcc -Wall -Wextra -std=c11 -g -c src/coordinator.c -o src/coordinator.o
+gcc -Wall -Wextra -std=c11 -g -o ksne src/main.o src/mural.o src/tedax.o src/ui.o src/coordinator.o -lpthread -lncurses

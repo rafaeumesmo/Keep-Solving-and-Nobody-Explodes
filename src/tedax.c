@@ -122,9 +122,10 @@ static void* tedax_thread_fn(void *arg) {
             log_event("[T%d] bancada %d confirmada (pre-assign) M%d", self->id, assigned_bench, m->id);
         }
 
-        while (pool_running && self->remaining > 0) {
+        int elapsed = 0;
+        while (pool_running && elapsed < m->time_required) {
             sleep(1);
-
+            elapsed++;
             time_t now = time(NULL);
             if (now > (m->created_at + m->timeout_secs)) {
                 log_event("[T%d] 💥 M%d EXPLODIU na mao! (Timeout)", self->id, m->id);
@@ -132,11 +133,6 @@ static void* tedax_thread_fn(void *arg) {
                 m->instruction[0] = '\0'; // Garante falha
                 break; 
             }
-
-            pthread_mutex_lock(&self->lock);
-            self->remaining = m->time_required - (int)(time(NULL) - self->start_time);
-            if (self->remaining < 0) self->remaining = 0;
-            pthread_mutex_unlock(&self->lock);
         }
 
         int success = 0;
@@ -165,6 +161,14 @@ static void* tedax_thread_fn(void *arg) {
         } else {
             log_event("[T%d] ✖ M%d FALHOU — re-enfileirado", self->id, m->id);
             m->instruction[0] = '\0'; 
+            // Ao re-enfileirar, reduzir o tempo restante do módulo (penalidade)
+            // Calculamos uma redução baseada no tempo gasto (elapsed)
+            int reduction = elapsed; // reduzir em segundos iguais ao tempo gasto
+            if (reduction <= 0) reduction = 1;
+            int new_timeout = m->timeout_secs - reduction;
+            if (new_timeout < 1) new_timeout = 1;
+            m->timeout_secs = new_timeout;
+            m->created_at = time(NULL); // reinicia criação para usar novo timeout
             mural_requeue(m);
         }
 
@@ -180,7 +184,7 @@ static void* tedax_thread_fn(void *arg) {
     return NULL;
 }
 
-void tedax_pool_init(int n, sem_t *benches_sem) {
+void tedax_pool_init(int n, int benches_count, sem_t *benches_sem) {
     if (n <= 0) return;
     pthread_mutex_lock(&pool_mutex);
 
@@ -188,11 +192,14 @@ void tedax_pool_init(int n, sem_t *benches_sem) {
     pool_n = n;
     pool_running = 1;
 
+    if (benches_count > 0) num_benches = benches_count;
+    else {
 #ifdef NUM_BENCHES
-    num_benches = NUM_BENCHES;
+        num_benches = NUM_BENCHES;
 #else
-    num_benches = 2;
+        num_benches = 2;
 #endif
+    }
     bench_busy = calloc(num_benches, sizeof(int));
 
     pool = calloc(pool_n, sizeof(tedax_t));
@@ -210,6 +217,10 @@ void tedax_pool_init(int n, sem_t *benches_sem) {
 
     pthread_mutex_unlock(&pool_mutex);
     log_event("[SYSTEM] Tedax pool iniciado: %d unidades, %d bancadas", pool_n, num_benches);
+}
+
+int tedax_bench_count(void) {
+    return num_benches;
 }
 
 void tedax_pool_shutdown(void) {
