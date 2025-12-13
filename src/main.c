@@ -139,7 +139,14 @@ int main(void) {
                 running = 0;
             }
 
-            // 2. Verifica se o utilizador pressionou Q (UI fechou)
+            // 2. Verifica CONDIÇÃO DE VITÓRIA (Score >= Meta)
+            if (mural_get_score() >= WIN_SCORE_TARGET) {
+                log_event("[SYSTEM] 🏆 VITORIA! %d MODULOS RESOLVIDOS!", WIN_SCORE_TARGET);
+                sleep(4); // Espera um pouco para ver a mensagem
+                running = 0;
+            }
+
+            // 3. Verifica se o utilizador pressionou Q (UI fechou)
             if (!is_ui_active()) {
                 running = 0;
             }

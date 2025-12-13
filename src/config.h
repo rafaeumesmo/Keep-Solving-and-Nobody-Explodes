@@ -9,6 +9,9 @@
 #define GAME_DURATION_SEC 180        // Duração total do jogo (segundos)
 #define MODULE_TIMEOUT_SEC 30        // timeout para módulos no mural
 
+// META DE VITORIA (Alterado conforme pedido)
+#define WIN_SCORE_TARGET 2
+
 // Economia
 #define MOEDAS_INICIAL 0
 #define MOEDAS_POR_MODULO 10

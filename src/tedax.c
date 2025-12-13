@@ -111,9 +111,7 @@ static void* tedax_thread_fn(void *arg) {
 
         pthread_mutex_unlock(&self->lock);
 
-        // --- CORREÇÃO DO BUG AQUI ---
         if (assigned_bench < 0) {
-            // Se não veio bancada pré-definida, busca uma (bloqueante)
             log_event("[T%d] aguardando bancada para M%d...", self->id, m->id);
             assigned_bench = bench_acquire_index_blocking();
             pthread_mutex_lock(&self->lock);
@@ -121,30 +119,21 @@ static void* tedax_thread_fn(void *arg) {
             pthread_mutex_unlock(&self->lock);
             log_event("[T%d] bancada %d ocupada para M%d", self->id, assigned_bench, m->id);
         } else {
-            // Se já veio pré-definida pelo Coordenador (Auto/Manual),
-            // CONFIAMOS que ela já está marcada como ocupada no array bench_busy.
-            // Não tentamos marcar de novo, apenas usamos.
             log_event("[T%d] bancada %d confirmada (pre-assign) M%d", self->id, assigned_bench, m->id);
         }
-        // ----------------------------
 
+        // Simula o tempo de trabalho
         while (pool_running && self->remaining > 0) {
             sleep(1);
 
-            // --- [MODIFICAÇÃO] Timeout em Tempo Real ---
-            // Se o módulo expirar enquanto está sendo processado, explode na mão
+            // Timeout em Tempo Real
             time_t now = time(NULL);
             if (now > (m->created_at + m->timeout_secs)) {
                 log_event("[T%d] 💥 M%d EXPLODIU na mao! (Timeout)", self->id, m->id);
-                
-                // Força saída do loop
                 self->remaining = 0;
-                
-                // Anula instrução para garantir falha na verificação posterior
-                m->instruction[0] = '\0'; 
+                m->instruction[0] = '\0'; // Garante falha
                 break; 
             }
-            // -------------------------------------------
 
             pthread_mutex_lock(&self->lock);
             self->remaining = m->time_required - (int)(time(NULL) - self->start_time);
@@ -152,25 +141,38 @@ static void* tedax_thread_fn(void *arg) {
             pthread_mutex_unlock(&self->lock);
         }
 
+        // --- LÓGICA DE SUCESSO MODIFICADA ---
         int success = 0;
-        if (m->instruction[0] == '\0') {
-            success = 0;
-        } else {
+        
+        // Caso 1: Input Manual (Instrução existe)
+        if (m->instruction[0] != '\0') {
             if (ci_equal(m->instruction, m->solution)) success = 1;
             else success = 0;
+        } 
+        // Caso 2: Auto-Assign (Instrução vazia) -> Chance Aleatória
+        else {
+            // Chance de 60% de acertar no modo automático
+            int chance = rand() % 100;
+            if (chance < 60) {
+                success = 1;
+            } else {
+                success = 0;
+                log_event("[T%d] IA falhou no desarmamento automatico.", self->id);
+            }
         }
+        // ------------------------------------
 
         bench_release_index(assigned_bench);
 
         if (success) {
-            // --- [MODIFICAÇÃO] Log de Ouro + Adicionar Moedas ---
             log_event("[T%d] ✔ M%d DESARMADO (+%d Gold)", self->id, m->id, MOEDAS_POR_MODULO);
             mural_add_score();
-            mural_add_money(MOEDAS_POR_MODULO); // Adiciona dinheiro ao jogador
+            mural_add_money(MOEDAS_POR_MODULO);
             free(m);
-            // ----------------------------------------------------
         } else {
             log_event("[T%d] ✖ M%d FALHOU — re-enfileirado", self->id, m->id);
+            // Reseta instrução para não falhar imediatamente na próxima
+            m->instruction[0] = '\0'; 
             mural_requeue(m);
         }
 
@@ -280,7 +282,6 @@ int tedax_request_auto(module_t *m) {
     }
     if (chosen < 0) return -1;
 
-    // AQUI: Marcamos a bancada como ocupada imediatamente
     int bidx = bench_try_acquire_index();
     if (bidx < 0) {
         return -1;
@@ -313,7 +314,6 @@ int tedax_request_manual(module_t *m, int tedax_id, int bench_id, int presses) {
     }
     pthread_mutex_unlock(&pool[tedax_id].lock);
 
-    // Manualmente reservando a bancada (marcando ocupada)
     int ok = 0;
     pthread_mutex_lock(&bench_mutex);
     if (!bench_busy[bench_id]) {
